@@ -28,6 +28,11 @@ VERSION=${1:-"${DETECTED_VERSION}"}
 PLATFORM=${2:-"${DETECTED_PLATFORM}"}
 ARCH=${3:-"${DETECTED_ARCH}"}
 
+# Remap darwin → macos for release naming
+if [[ "${PLATFORM}" == "darwin" ]]; then
+    PLATFORM="macos"
+fi
+
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 RELEASE_NAME="sussurro-${PLATFORM}-${ARCH}"
@@ -68,7 +73,7 @@ cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
     echo "================================"
     echo ""
     echo "Quick Start:"
-    if [[ "${PLATFORM}" == "darwin" ]]; then
+    if [[ "${PLATFORM}" == "macos" ]]; then
         echo "1. Make the binary executable:  chmod +x sussurro"
         echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro"
         echo "3. Run:                         ./sussurro"
