@@ -1,13 +1,34 @@
 #!/bin/bash
-# Package Sussurro for release
-# Usage: ./scripts/package-release.sh <version> <platform> <arch>
-# Example: ./scripts/package-release.sh 1.3 linux amd64
+# Package Sussurro for release.
+# All three arguments are optional — they are auto-detected when omitted.
+# Usage: ./scripts/package-release.sh [version] [platform] [arch]
+# Example (explicit): ./scripts/package-release.sh 1.7 linux amd64
+# Example (auto):     ./scripts/package-release.sh
 
 set -e
 
-VERSION=${1:-"1.3"}
-PLATFORM=${2:-"linux"}
-ARCH=${3:-"amd64"}
+# ── Auto-detection ─────────────────────────────────────────────────────────────
+
+# Version: extracted from internal/version/version.go
+DETECTED_VERSION=$(grep 'Version = ' internal/version/version.go 2>/dev/null \
+    | sed 's/.*"\(.*\)"/\1/' | tr -d '[:space:]') || DETECTED_VERSION="unknown"
+
+# Platform: uname -s lowercased (darwin / linux)
+DETECTED_PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+# Arch: normalise uname -m to Go-style names (amd64 / arm64)
+DETECTED_RAW_ARCH=$(uname -m)
+case "${DETECTED_RAW_ARCH}" in
+    x86_64)        DETECTED_ARCH="amd64"  ;;
+    aarch64|arm64) DETECTED_ARCH="arm64"  ;;
+    *)             DETECTED_ARCH="${DETECTED_RAW_ARCH}" ;;
+esac
+
+VERSION=${1:-"${DETECTED_VERSION}"}
+PLATFORM=${2:-"${DETECTED_PLATFORM}"}
+ARCH=${3:-"${DETECTED_ARCH}"}
+
+# ── Setup ──────────────────────────────────────────────────────────────────────
 
 RELEASE_NAME="sussurro-${PLATFORM}-${ARCH}"
 RELEASE_DIR="release/${RELEASE_NAME}"
@@ -24,71 +45,73 @@ if [ ! -f "bin/sussurro" ]; then
     exit 1
 fi
 
-# Copy binary
+# ── Files ──────────────────────────────────────────────────────────────────────
+
 echo "Copying binary..."
 cp bin/sussurro "${RELEASE_DIR}/sussurro"
 chmod +x "${RELEASE_DIR}/sussurro"
 
-# Copy scripts
-echo "Copying scripts..."
-cp scripts/trigger.sh "${RELEASE_DIR}/trigger.sh"
-chmod +x "${RELEASE_DIR}/trigger.sh"
+# trigger.sh is a Wayland/X11 helper — only relevant on Linux
+if [[ "${PLATFORM}" == "linux" ]]; then
+    echo "Copying trigger.sh..."
+    cp scripts/trigger.sh "${RELEASE_DIR}/trigger.sh"
+    chmod +x "${RELEASE_DIR}/trigger.sh"
+fi
 
-# Copy example config
 echo "Copying example config..."
 cp configs/default.yaml "${RELEASE_DIR}/config.example.yaml"
 
-# Create a quick install guide
-cat > "${RELEASE_DIR}/INSTALL.txt" << 'EOF'
-Sussurro v${VERSION} Installation
-================================
+# ── INSTALL.txt ────────────────────────────────────────────────────────────────
 
-Quick Start:
-1. Make executable: chmod +x sussurro trigger.sh
-2. macOS only: xattr -d com.apple.quarantine sussurro
-3. Run: ./sussurro
-4. Follow the prompts to download AI models
-5. Set up keyboard shortcut (Wayland users only, see below)
+{
+    echo "Sussurro v${VERSION} Installation"
+    echo "================================"
+    echo ""
+    echo "Quick Start:"
+    if [[ "${PLATFORM}" == "darwin" ]]; then
+        echo "1. Make the binary executable:  chmod +x sussurro"
+        echo "2. Remove macOS quarantine:     xattr -d com.apple.quarantine sussurro"
+        echo "3. Run:                         ./sussurro"
+    else
+        echo "1. Make the binary executable:  chmod +x sussurro trigger.sh"
+        echo "2. Run:                         ./sussurro"
+    fi
+    echo "   Follow the prompts to download AI models."
+    echo ""
+    if [[ "${PLATFORM}" == "linux" ]]; then
+        echo "For Wayland Users:"
+        echo "-----------------"
+        echo "If you're on Wayland (check with: echo \$XDG_SESSION_TYPE):"
+        echo ""
+        echo "1. Make sure you have wl-clipboard installed:"
+        echo "   Arch:   sudo pacman -S wl-clipboard"
+        echo "   Ubuntu: sudo apt install wl-clipboard"
+        echo ""
+        echo "2. Set up a keyboard shortcut in your desktop environment:"
+        echo "   - Open keyboard settings"
+        echo "   - Add custom shortcut: Ctrl+Shift+Space"
+        echo "   - Command: /full/path/to/trigger.sh"
+        echo "   - See full guide: https://github.com/cesp99/sussurro/blob/master/docs/wayland.md"
+        echo ""
+        echo "For X11 Users:"
+        echo "-------------"
+        echo "Just run ./sussurro — hotkeys work automatically!"
+        echo "Hold Ctrl+Shift+Space to talk, release to transcribe."
+        echo ""
+    fi
+    echo "Documentation:"
+    echo "-------------"
+    echo "Full docs:       https://github.com/cesp99/sussurro"
+    echo "Quick Start:     https://github.com/cesp99/sussurro/blob/master/docs/quickstart.md"
+} > "${RELEASE_DIR}/INSTALL.txt"
 
-For Wayland Users:
------------------
-If you're on Wayland (check with: echo $XDG_SESSION_TYPE):
+# ── Tarball + checksum ─────────────────────────────────────────────────────────
 
-1. Make sure you have wl-clipboard installed:
-   Arch: sudo pacman -S wl-clipboard
-   Ubuntu: sudo apt install wl-clipboard
-
-2. Set up keyboard shortcut in your desktop environment:
-   - Open keyboard settings
-   - Add custom shortcut: Ctrl+Shift+Space
-   - Command: /full/path/to/trigger.sh
-   - See full guide: https://github.com/cesp99/sussurro/blob/master/docs/wayland.md
-
-For X11 Users:
--------------
-Just run ./sussurro - hotkeys work automatically!
-Hold Ctrl+Shift+Space to talk, release to transcribe.
-
-Documentation:
--------------
-Full documentation: https://github.com/cesp99/sussurro
-Quick Start Guide: https://github.com/cesp99/sussurro/blob/master/docs/quickstart.md
-EOF
-
-# Replace version placeholder (compatible with both GNU and BSD sed)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/\${VERSION}/${VERSION}/g" "${RELEASE_DIR}/INSTALL.txt"
-else
-    sed -i "s/\${VERSION}/${VERSION}/g" "${RELEASE_DIR}/INSTALL.txt"
-fi
-
-# Create tarball
 echo "Creating tarball..."
 cd release
 tar -czf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}/"
 cd ..
 
-# Create checksum
 echo "Generating checksum..."
 cd release
 if command -v sha256sum &> /dev/null; then
@@ -100,11 +123,13 @@ else
 fi
 cd ..
 
+# ── Summary ────────────────────────────────────────────────────────────────────
+
 echo ""
 echo "Release package created successfully!"
 echo ""
-echo "Package: release/${RELEASE_NAME}.tar.gz"
-echo "SHA256: release/${RELEASE_NAME}.tar.gz.sha256"
+echo "Package : release/${RELEASE_NAME}.tar.gz"
+echo "SHA256  : release/${RELEASE_NAME}.tar.gz.sha256"
 echo ""
 echo "Contents:"
 ls -lh "release/${RELEASE_NAME}/"

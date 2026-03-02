@@ -2,6 +2,15 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [1.8] - 2026-03-02
+
+### Fixed
+- **Word merging at Whisper segment boundaries** (`internal/asr`): Whisper splits its output into multiple internal segments; these were joined with bare string concatenation (`result += segment.Text`), causing words at boundaries to fuse (e.g. *"went to"* → *"wentto"*). Each segment is now `TrimSpace`'d, empty segments are dropped, and all parts are joined with a single space — `strings.Join(parts, " ")` — making the fix model-agnostic.
+
+### Build
+- **Conservative Apple Silicon CPU target** (`Makefile`): whisper.cpp is now built with `-mcpu=apple-m1` on Darwin/arm64 via `-DCMAKE_C_FLAGS` / `-DCMAKE_CXX_FLAGS`. This selects ARMv8.5-A, the shared baseline for all M-series chips, preventing the compiler from emitting M2/M3-specific instructions (AMX2, SME) that caused `Illegal instruction` crashes on M1 hardware. go-llama.cpp is left unmodified to avoid clobbering its own include paths.
+- **Auto-detecting release packaging** (`scripts/package-release.sh`): version, platform, and architecture are now detected automatically (from `internal/version/version.go`, `uname -s`, and `uname -m`). All three can still be overridden via positional arguments. `trigger.sh` is no longer bundled in macOS releases — it is a Wayland/X11 helper only relevant on Linux. `INSTALL.txt` is now generated dynamically per platform.
+
 ## [1.7] - 2026-02-27
 
 ### Performance
