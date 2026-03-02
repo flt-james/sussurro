@@ -3,6 +3,7 @@ package asr
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/cesp99/sussurro/internal/logger"
@@ -63,17 +64,21 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 		return "", fmt.Errorf("transcription failed: %w", err)
 	}
 
-	// Iterate through segments to build the full text
-	var result string
+	// Iterate through segments to build the full text.
+	// Each segment is trimmed before joining with a space to prevent words
+	// from merging at segment boundaries (e.g. "wentto" instead of "went to").
+	var parts []string
 	for {
 		segment, err := e.context.NextSegment()
 		if err != nil {
 			break // End of segments
 		}
-		result += segment.Text
+		if t := strings.TrimSpace(segment.Text); t != "" {
+			parts = append(parts, t)
+		}
 	}
 
-	return result, nil
+	return strings.TrimSpace(strings.Join(parts, " ")), nil
 }
 
 // Close releases resources

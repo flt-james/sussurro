@@ -33,10 +33,10 @@ type linuxOverlay struct {
 
 // Singleton callbacks — only one overlay per process.
 var (
-	globalDownCB        func()
-	globalUpCB          func()
+	globalDownCB         func()
+	globalUpCB           func()
 	globalOpenSettingsCB func()
-	globalQuitCB        func()
+	globalQuitCB         func()
 )
 
 //export goHotkeyDown

@@ -15,14 +15,26 @@ LLAMA_DIR := third_party/go-llama.cpp
 # Detect number of CPU cores for parallel builds
 NPROCS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
 
-# Detect OS for platform-specific builds
+# Detect OS and architecture for platform-specific builds
 UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
 	BUILD_TYPE := metal
 	GGML_METAL_PATH := -L$(WHISPER_DIR)/build/ggml/src/ggml-metal
 else
 	BUILD_TYPE :=
 	GGML_METAL_PATH :=
+endif
+
+# Conservative CPU target for Apple Silicon.
+# -mcpu=apple-m1 is the ARMv8.5-A baseline shared by all M-series chips (M1/M2/M3/M4).
+# Without this, building on an M2+ machine can emit instructions (e.g. SME/AMX2)
+# that trigger Illegal Instruction crashes on M1 hardware.
+ARM_COMPAT_CFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(UNAME_M),arm64)
+	ARM_COMPAT_CFLAGS := -mcpu=apple-m1
+endif
 endif
 
 # ---- UI / overlay dependencies (Linux only) ----
@@ -93,7 +105,12 @@ deps:
 		./scripts/patch-whisper.sh; \
 	fi
 	@echo "Building whisper.cpp library..."
-	@cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF
+	@cmake -S $(WHISPER_DIR) -B $(WHISPER_DIR)/build \
+		-DGGML_NATIVE=OFF \
+		-DBUILD_SHARED_LIBS=OFF \
+		-DWHISPER_BUILD_TESTS=OFF \
+		-DWHISPER_BUILD_EXAMPLES=OFF \
+		$(if $(ARM_COMPAT_CFLAGS),-DCMAKE_C_FLAGS="$(ARM_COMPAT_CFLAGS)" -DCMAKE_CXX_FLAGS="$(ARM_COMPAT_CFLAGS)")
 	@cmake --build $(WHISPER_DIR)/build --config Release --target whisper -j $(NPROCS)
 	@if [ ! -d "$(LLAMA_DIR)" ]; then \
 		echo "Cloning go-llama.cpp..."; \
