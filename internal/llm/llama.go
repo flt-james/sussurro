@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -12,11 +13,7 @@ import (
 
 // Pre-compiled regexes — compiling on every call is expensive.
 var (
-	reThinkBlock   = regexp.MustCompile(`(?s)<think>.*?</think>`)
-	rePunctDot     = regexp.MustCompile(`([a-zA-Z])\.([A-Z][a-z])`)
-	reExclQuestion = regexp.MustCompile(`([!?])([A-Za-z])`)
-	reComma        = regexp.MustCompile(`(,)([A-Za-z0-9])`)
-	reMultiSpace   = regexp.MustCompile(`\s{2,}`)
+	reThinkBlock = regexp.MustCompile(`(?s)<think>.*?</think>`)
 )
 
 // Engine handles the LLM model and text generation
@@ -118,9 +115,6 @@ Output ONLY the cleaned transcription text, nothing else.
 
 	cleaned = strings.TrimSpace(cleaned)
 
-	// Fix spacing after punctuation
-	cleaned = fixPunctuationSpacing(cleaned)
-
 	// Cut off at common hallucination markers if stop strings didn't catch them
 	if idx := strings.Index(cleaned, "Input:"); idx != -1 {
 		cleaned = cleaned[:idx]
@@ -134,33 +128,15 @@ Output ONLY the cleaned transcription text, nothing else.
 
 	cleaned = strings.TrimSpace(cleaned)
 
+	slog.Debug("LLM raw output (pre-validation)", "output", cleaned)
+
 	// Anti-Hallucination Check
 	if !validateOutput(rawText, cleaned) {
-		return fixPunctuationSpacing(rawText), nil // Fallback to raw text, still fix spacing
+		slog.Debug("validateOutput rejected, falling back to raw")
+		return rawText, nil // Fallback to raw text, still fix spacing
 	}
 
 	return cleaned, nil
-}
-
-// fixPunctuationSpacing ensures proper spacing after punctuation marks
-func fixPunctuationSpacing(text string) string {
-	// Add space after period when:
-	// - Preceded by any letter (catches "I.Like", "OK.So", "USA.The" as well as "sentence.Another")
-	// - Followed by an uppercase+lowercase sequence (a real word, not an abbreviation letter)
-	// This handles: "sentence.Another", "I.Like", "OK.So" -> adds space
-	// Preserves: "U.S.A." (S followed by dot not [a-z]), "google.com" (c is lowercase not [A-Z])
-	text = rePunctDot.ReplaceAllString(text, "$1. $2")
-
-	// Handle ! and ? (less likely to be in URLs or abbreviations)
-	text = reExclQuestion.ReplaceAllString(text, "$1 $2")
-
-	// Add space after comma if followed by a letter or digit (no space)
-	text = reComma.ReplaceAllString(text, "$1 $2")
-
-	// Clean up multiple spaces
-	text = reMultiSpace.ReplaceAllString(text, " ")
-
-	return text
 }
 
 func validateOutput(raw, cleaned string) bool {
@@ -183,38 +159,33 @@ func validateOutput(raw, cleaned string) bool {
 		}
 	}
 
-	// 3. Semantic Content Check (Bag of Words)
-	// Ensure significant words from raw text are present in cleaned text.
-	// We ignore common filler words.
-	rawWords := strings.Fields(strings.ToLower(raw))
-	cleanedLower := strings.ToLower(cleaned)
+	// 3. Semantic Content Check (Anti-Hallucination)
+	// The model should freely REMOVE words (that's the point of cleanup), but should
+	// not ADD content that wasn't in the raw text. Check for invented words instead.
+	rawLower := strings.ToLower(raw)
+	cleanedWords := strings.Fields(strings.ToLower(cleaned))
 
-	missingCount := 0
-	totalSignificant := 0
-
-	// Basic stop words to ignore
 	stopWords := map[string]bool{
 		"umm": true, "ah": true, "uh": true, "like": true, "so": true,
 		"just": true, "a": true, "an": true, "the": true,
 	}
 
-	for _, w := range rawWords {
-		// Clean punctuation
+	inventedCount := 0
+	totalCleanedSignificant := 0
+
+	for _, w := range cleanedWords {
 		w = strings.Trim(w, ".,!?-")
 		if w == "" || stopWords[w] {
 			continue
 		}
-
-		totalSignificant++
-		// Check if word exists in cleaned text
-		if !strings.Contains(cleanedLower, w) {
-			missingCount++
+		totalCleanedSignificant++
+		if !strings.Contains(rawLower, w) {
+			inventedCount++
 		}
 	}
 
-	// If we are missing more than 50% of significant words, it's likely a hallucination
-	// (or a complete rewrite which we don't want)
-	if totalSignificant > 0 && float64(missingCount)/float64(totalSignificant) > 0.5 {
+	// If >30% of cleaned words were not in raw, likely hallucination
+	if totalCleanedSignificant > 0 && float64(inventedCount)/float64(totalCleanedSignificant) > 0.3 {
 		return false
 	}
 
