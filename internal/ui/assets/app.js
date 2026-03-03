@@ -31,6 +31,9 @@ function render(data) {
 
   // Hotkey
   renderHotkey(data.hotkey, data.isWayland);
+
+  // Language
+  renderLanguage(data.language);
 }
 
 // ---- Model list ----
@@ -139,6 +142,39 @@ window.onDownloadError = function(modelId, err) {
   if (progWrap) { progWrap.hidden = true; }
   console.error('Download error:', modelId, err);
 };
+
+// ---- Language ----
+const WHISPER_LANGUAGES = [
+  { code: 'auto', name: 'Auto Detect' },
+  { code: 'en',   name: 'English' },
+  { code: 'de',   name: 'German' },
+  { code: 'es',   name: 'Spanish' },
+  { code: 'fr',   name: 'French' },
+  { code: 'pt',   name: 'Portuguese' },
+  { code: 'ru',   name: 'Russian' },
+  { code: 'it',   name: 'Italian' },
+];
+
+function renderLanguage(currentLang) {
+  const select = document.getElementById('language-select');
+  if (!select) return;
+
+  select.innerHTML = '';
+  const active = currentLang || 'en';
+
+  WHISPER_LANGUAGES.forEach(({ code, name }) => {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = name;
+    if (code === active) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  select.onchange = async () => {
+    const res = await window.saveLanguage(select.value);
+    if (!res.startsWith('error')) showRestartBanner();
+  };
+}
 
 // ---- Hotkey ----
 function renderHotkey(trigger, isWayland) {

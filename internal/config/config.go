@@ -37,9 +37,10 @@ type ModelsConfig struct {
 }
 
 type ASRConfig struct {
-	Path    string `mapstructure:"path"`
-	Type    string `mapstructure:"type"`
-	Threads int    `mapstructure:"threads"`
+	Path     string `mapstructure:"path"`
+	Type     string `mapstructure:"type"`
+	Threads  int    `mapstructure:"threads"`
+	Language string `mapstructure:"language"`
 }
 
 type LLMConfig struct {
@@ -89,6 +90,69 @@ func SaveHotkey(cfg *Config, trigger string) error {
 	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
 }
 
+// SaveLanguage rewrites only the models.asr.language field in the YAML config file.
+// If the key does not exist (old config), it inserts it after the threads: line in the asr: section.
+func SaveLanguage(cfg *Config, language string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find home directory: %w", err)
+	}
+	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// First pass: replace existing language: key.
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "language:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + `language: "` + language + `"`
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+		}
+	}
+
+	// Key missing: insert after threads: inside the asr: subsection.
+	inASR := false
+	asrIndent := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "asr:" {
+			inASR = true
+			asrIndent = indent
+			continue
+		}
+
+		if inASR {
+			// Leaving the asr: block when indent drops back to its level.
+			if indent <= asrIndent {
+				inASR = false
+				continue
+			}
+			if strings.HasPrefix(trimmed, "threads:") {
+				threadIndent := line[:indent]
+				newLine := threadIndent + `language: "` + language + `"`
+				newLines := make([]string, 0, len(lines)+1)
+				newLines = append(newLines, lines[:i+1]...)
+				newLines = append(newLines, newLine)
+				newLines = append(newLines, lines[i+1:]...)
+				return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
+			}
+		}
+	}
+
+	return fmt.Errorf("could not find asr.threads key in config file; cannot insert language")
+}
+
 func LoadConfig(path string) (*Config, error) {
 	if path != "" {
 		// If a specific file path is provided, use it directly
@@ -101,6 +165,8 @@ func LoadConfig(path string) (*Config, error) {
 		viper.AddConfigPath("$HOME/.sussurro")
 		viper.AddConfigPath("./configs")
 	}
+
+	viper.SetDefault("models.asr.language", "en")
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

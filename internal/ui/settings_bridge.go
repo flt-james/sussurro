@@ -31,6 +31,7 @@ type initialData struct {
 	Models    []modelInfo `json:"models"`
 	Hotkey    string      `json:"hotkey"`
 	IsWayland bool        `json:"isWayland"`
+	Language  string      `json:"language"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -63,6 +64,20 @@ func bindBridge(sw *settingsWindow) {
 		// Re-register the OS-level hotkey with the new trigger so it takes
 		// effect immediately without requiring a restart.
 		go mgr.reinstallHotkey(trigger)
+		return "ok"
+	})
+
+	sw.w.Bind("saveLanguage", func(lang string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveLanguage", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		if err := config.SaveLanguage(mgr.cfg, lang); err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		mgr.cfg.Models.ASR.Language = lang
 		return "ok"
 	})
 
@@ -202,6 +217,7 @@ func buildInitialData(mgr *Manager) initialData {
 		Models:    models,
 		Hotkey:    mgr.cfg.Hotkey.Trigger,
 		IsWayland: isWayland,
+		Language:  mgr.cfg.Models.ASR.Language,
 	}
 }
 

@@ -2,6 +2,16 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [1.9] - 2026-03-03
+
+### Added
+- **Transcription language selector** (`internal/ui`): Settings now includes a "Transcription Language" section with a dropdown to choose the language Whisper listens for. Supported options: Auto Detect, English, German, Spanish, French, Portuguese, Russian, Italian. Defaults to English.
+- **`models.asr.language` config field** (`internal/config`): new `Language` field on `ASRConfig`; viper default is `"en"`. `SaveLanguage()` writes the value to `~/.sussurro/config.yaml`, inserting the key after `threads:` in the `asr:` block when upgrading from older configs that lack it.
+- **Whisper language passthrough** (`internal/asr`): `NewEngine` accepts a `language` parameter and calls `ctx.SetLanguage()` on the whisper context. Failures are logged as warnings only, preserving compatibility with English-only models.
+
+### Fixed
+- **LLM empty-output fallback** (`internal/llm`): when Qwen3 produces only a `<think>…</think>` block with no content (a rare but reproducible edge case), `validateOutput` incorrectly returned `true` for the resulting empty string, causing an empty injection. An explicit `cleaned == ""` guard now falls back to the raw ASR text before reaching `validateOutput`.
+
 ## [1.8] - 2026-03-02
 
 ### Fixed

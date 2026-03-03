@@ -46,6 +46,7 @@ models:
     path: "/home/you/.sussurro/models/ggml-small.bin"
     type: "whisper"
     threads: 4
+    language: "en"   # BCP-47 code passed to Whisper; "auto" for auto-detection
   llm:
     path: "/home/you/.sussurro/models/qwen3-sussurro-q4_k_m.gguf" # Path to Qwen 3 model
     context_size: 32768                   # Qwen 3 supports large context
@@ -69,6 +70,16 @@ sussurro --whisper   # or: sussurro --wsp
 | Whisper Large v3 Turbo | `ggml-large-v3-turbo.bin` | 1.62 GB | Slower, higher accuracy |
 
 The `--whisper` / `--wsp` flag opens an interactive menu, downloads the chosen model if needed, and updates `~/.sussurro/config.yaml` automatically.
+
+#### Transcription language
+
+The `language` key tells Whisper which language to expect. Use any [BCP-47 code supported by Whisper](https://github.com/openai/whisper#available-models-and-languages) (e.g. `"en"`, `"it"`, `"de"`, `"fr"`) or `"auto"` to let the model detect the language automatically. Defaults to `"en"`.
+
+The value can be changed at any time from the **Settings → Transcription Language** dropdown; the new value is written to `~/.sussurro/config.yaml` immediately and takes effect on next launch. It can also be overridden via the environment:
+
+```bash
+export SUSSURRO_MODELS_ASR_LANGUAGE=it
+```
 
 ### Hotkey Settings
 ```yaml

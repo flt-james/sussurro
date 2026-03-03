@@ -25,6 +25,7 @@ Sussurro uses local AI models to ensure privacy and low latency:
 - **System-Wide**: Works in any application where you can type
 - **Flexible ASR**: Whisper Small (fast) or Large v3 Turbo (accurate), switchable from the UI
 - **Live Hotkey Config**: Change the global hotkey from Settings — takes effect instantly, no restart
+- **Transcription Language**: Choose the language Whisper listens for (or use Auto Detect) directly from Settings
 - **Headless Mode**: `--no-ui` flag for CLI/scripting use on any platform
 
 ## Documentation
@@ -144,7 +145,7 @@ When Sussurro runs (Linux or macOS), a sleek pill-shaped capsule appears at the 
 | System tray | Click the Sussurro icon → **Open Settings** |
 | Right-click overlay | Right-click the capsule → **Open Settings** |
 
-The settings window lets you switch Whisper models, download models with a live progress bar, and change the global hotkey. Hotkey changes take effect immediately — no restart required. The live hotkey recorder shows a real-time preview as you press keys.
+The settings window lets you switch Whisper models, download models with a live progress bar, select the transcription language, and change the global hotkey. Hotkey changes take effect immediately — no restart required. The live hotkey recorder shows a real-time preview as you press keys.
 
 ---
 
