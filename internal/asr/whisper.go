@@ -2,6 +2,7 @@ package asr
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -19,7 +20,7 @@ type Engine struct {
 }
 
 // NewEngine initializes the Whisper model from a file path
-func NewEngine(modelPath string, threads int, debug bool) (*Engine, error) {
+func NewEngine(modelPath string, threads int, language string, debug bool) (*Engine, error) {
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("model file not found at %s: %w", modelPath, err)
 	}
@@ -37,6 +38,13 @@ func NewEngine(modelPath string, threads int, debug bool) (*Engine, error) {
 	ctx, err := model.NewContext()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create whisper context: %w", err)
+	}
+
+	if language != "" {
+		if err := ctx.SetLanguage(language); err != nil {
+			// Log warning but don't fail — e.g. english-only model ignores language
+			slog.Warn("whisper: could not set language", "language", language, "error", err)
+		}
 	}
 
 	return &Engine{

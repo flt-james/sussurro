@@ -130,6 +130,12 @@ Output ONLY the cleaned transcription text, nothing else.
 
 	slog.Debug("LLM raw output (pre-validation)", "output", cleaned)
 
+	// Empty output means the model produced nothing usable (e.g. only a <think> block).
+	if cleaned == "" {
+		slog.Debug("LLM returned empty output, falling back to raw")
+		return rawText, nil
+	}
+
 	// Anti-Hallucination Check
 	if !validateOutput(rawText, cleaned) {
 		slog.Debug("validateOutput rejected, falling back to raw")

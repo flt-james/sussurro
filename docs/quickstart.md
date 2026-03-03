@@ -103,6 +103,7 @@ Open the Settings window:
 
 From Settings you can:
 - Switch or download Whisper models with a live progress bar
+- Change the transcription language (Auto Detect, English, German, Spanish, French, Portuguese, Russian, Italian)
 - Change the global hotkey (X11 / macOS) — takes effect immediately, no restart needed
   - Hold up to 3 keys in the recorder, then release them all to save
 
