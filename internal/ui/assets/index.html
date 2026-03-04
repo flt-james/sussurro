@@ -49,6 +49,18 @@
         <button class="hotkey-edit-btn" id="hotkey-edit-btn">Change</button>
       </div>
 
+      <!-- Mode row (X11 / macOS only) -->
+      <div id="hotkey-mode-row" class="setting-row" hidden>
+        <div>
+          <div class="toggle-label">Mode</div>
+          <div class="toggle-desc">Push to Talk: hold to record &middot; Toggle: press once to start/stop</div>
+        </div>
+        <select id="hotkey-mode-select">
+          <option value="push-to-talk">Push to Talk</option>
+          <option value="toggle">Toggle</option>
+        </select>
+      </div>
+
       <!-- Wayland note -->
       <div id="hotkey-wayland" class="hotkey-wayland-note" hidden>
         On Wayland, global hotkeys require a custom keyboard shortcut in your desktop environment.<br>

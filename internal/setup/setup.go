@@ -93,6 +93,7 @@ models:
 
 hotkey:
   trigger: "ctrl+shift+space"
+  mode: "push-to-talk" # push-to-talk or toggle
 
 injection:
   method: "keyboard"

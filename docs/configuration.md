@@ -84,8 +84,18 @@ export SUSSURRO_MODELS_ASR_LANGUAGE=it
 ### Hotkey Settings
 ```yaml
 hotkey:
-  trigger: "ctrl+shift+space" # The key combination to hold for recording
+  trigger: "ctrl+shift+space" # The key combination to use for recording
+  mode: "push-to-talk"        # "push-to-talk" or "toggle"
 ```
+
+**`mode`** controls how the hotkey activates recording:
+
+| Value | Behaviour |
+|-------|-----------|
+| `push-to-talk` | Hold the hotkey to record; release to transcribe. |
+| `toggle` | Press once to start recording; press again to transcribe. |
+
+Defaults to `"push-to-talk"`. Can be changed from **Settings → Global Hotkey → Mode** and takes effect immediately without a restart. Not applicable on Wayland (Wayland users configure their own shortcuts externally).
 
 The trigger string is `+`-separated: modifiers first, then the key. Modifier aliases:
 
