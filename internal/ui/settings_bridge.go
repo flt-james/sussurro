@@ -26,12 +26,13 @@ type modelInfo struct {
 
 // initialData is returned by getInitialData().
 type initialData struct {
-	Platform  string      `json:"platform"`
-	Version   string      `json:"version"`
-	Models    []modelInfo `json:"models"`
-	Hotkey    string      `json:"hotkey"`
-	IsWayland bool        `json:"isWayland"`
-	Language  string      `json:"language"`
+	Platform   string      `json:"platform"`
+	Version    string      `json:"version"`
+	Models     []modelInfo `json:"models"`
+	Hotkey     string      `json:"hotkey"`
+	HotkeyMode string      `json:"hotkeyMode"`
+	IsWayland  bool        `json:"isWayland"`
+	Language   string      `json:"language"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -64,6 +65,24 @@ func bindBridge(sw *settingsWindow) {
 		// Re-register the OS-level hotkey with the new trigger so it takes
 		// effect immediately without requiring a restart.
 		go mgr.reinstallHotkey(trigger)
+		return "ok"
+	})
+
+	sw.w.Bind("saveHotkeyMode", func(mode string) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveHotkeyMode", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		if mode != "push-to-talk" && mode != "toggle" {
+			return "error: invalid mode"
+		}
+		if err := config.SaveHotkeyMode(mgr.cfg, mode); err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		mgr.cfg.Hotkey.Mode = mode
+		go mgr.UpdateHotkeyMode(mode)
 		return "ok"
 	})
 
@@ -212,12 +231,13 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 
 	return initialData{
-		Platform:  platform,
-		Version:   version.Version,
-		Models:    models,
-		Hotkey:    mgr.cfg.Hotkey.Trigger,
-		IsWayland: isWayland,
-		Language:  mgr.cfg.Models.ASR.Language,
+		Platform:   platform,
+		Version:    version.Version,
+		Models:     models,
+		Hotkey:     mgr.cfg.Hotkey.Trigger,
+		HotkeyMode: mgr.cfg.Hotkey.Mode,
+		IsWayland:  isWayland,
+		Language:   mgr.cfg.Models.ASR.Language,
 	}
 }
 

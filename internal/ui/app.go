@@ -23,6 +23,11 @@ type Manager struct {
 	// Stored hotkey callbacks so the hotkey can be re-registered at runtime.
 	hotkeyOnDown func()
 	hotkeyOnUp   func()
+
+	// Factory that builds the right callbacks for a given mode
+	// ("push-to-talk" or "toggle"). Set once by the caller via
+	// SetHotkeyCallbackFactory before InstallHotkey is called.
+	hotkeyCallbackFactory func(mode string) (onDown func(), onUp func())
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -109,6 +114,25 @@ func (m *Manager) processUpdates() {
 			return
 		}
 	}
+}
+
+// SetHotkeyCallbackFactory stores a function that builds onDown/onUp callbacks
+// for a given mode string ("push-to-talk" or "toggle"). Must be called before
+// InstallHotkey.
+func (m *Manager) SetHotkeyCallbackFactory(fn func(mode string) (func(), func())) {
+	m.hotkeyCallbackFactory = fn
+}
+
+// UpdateHotkeyMode switches the active recording mode live, without requiring
+// a restart. It rebuilds the callbacks via the factory and reinstalls the hotkey.
+func (m *Manager) UpdateHotkeyMode(mode string) {
+	if m.hotkeyCallbackFactory == nil {
+		return
+	}
+	onDown, onUp := m.hotkeyCallbackFactory(mode)
+	m.hotkeyOnDown = onDown
+	m.hotkeyOnUp = onUp
+	reinstallOverlayHotkey(m.overlay, m.cfg.Hotkey.Trigger, onDown, onUp)
 }
 
 // InstallHotkey registers a platform hotkey tied to the overlay.

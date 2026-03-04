@@ -30,7 +30,7 @@ function render(data) {
   renderModelList('llm-list',     llmItems,     'llm');
 
   // Hotkey
-  renderHotkey(data.hotkey, data.isWayland);
+  renderHotkey(data.hotkey, data.hotkeyMode, data.isWayland);
 
   // Language
   renderLanguage(data.language);
@@ -177,12 +177,14 @@ function renderLanguage(currentLang) {
 }
 
 // ---- Hotkey ----
-function renderHotkey(trigger, isWayland) {
+function renderHotkey(trigger, mode, isWayland) {
   const x11Row     = document.getElementById('hotkey-x11');
+  const modeRow    = document.getElementById('hotkey-mode-row');
   const waylandRow = document.getElementById('hotkey-wayland');
 
   if (isWayland) {
     if (x11Row)     x11Row.hidden     = true;
+    if (modeRow)    modeRow.hidden    = true;
     if (waylandRow) waylandRow.hidden = false;
     return;
   }
@@ -195,6 +197,18 @@ function renderHotkey(trigger, isWayland) {
 
   const editBtn = document.getElementById('hotkey-edit-btn');
   if (editBtn) editBtn.addEventListener('click', () => showRecordModal(trigger));
+
+  // Mode selector
+  if (modeRow) {
+    modeRow.hidden = false;
+    const sel = document.getElementById('hotkey-mode-select');
+    if (sel) {
+      sel.value = mode || 'push-to-talk';
+      sel.onchange = async () => {
+        await window.saveHotkeyMode(sel.value);
+      };
+    }
+  }
 }
 
 function updateHotkeyDisplay(trigger) {

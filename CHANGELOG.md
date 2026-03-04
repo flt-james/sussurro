@@ -2,6 +2,15 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [2.0] - 2026-03-04
+
+### Added
+- **Hotkey mode switcher** (`internal/hotkey`, `internal/config`, `internal/ui`): a new `hotkey.mode` config field accepts `"push-to-talk"` (default, hold to record / release to transcribe) or `"toggle"` (first press starts recording, second press transcribes). The active mode is reflected immediately in the running process — no restart required.
+- **Settings → Global Hotkey → Mode selector**: the Settings window now shows a "Mode" dropdown beneath the hotkey display on X11 and macOS. The row is hidden on Wayland, where the hotkey is managed externally. Saving the dropdown writes the new value to `~/.sussurro/config.yaml` and hot-swaps the callbacks live.
+- **`SaveHotkeyMode()` config helper** (`internal/config`): line-by-line YAML rewriter; inserts `mode:` after `trigger:` when upgrading configs that pre-date 2.0.
+- **`SetHotkeyCallbackFactory` / `UpdateHotkeyMode`** (`internal/ui`): `Manager` now stores a callback factory so the correct `onDown`/`onUp` pair can be rebuilt for any mode change without restarting the hotkey system.
+- **`hotkeyMode` in `initialData`** bridge response: the JS layer reads the current mode from `getInitialData()` and pre-selects the matching option in the dropdown on every `reloadSettings()` call.
+
 ## [1.9] - 2026-03-03
 
 ### Added

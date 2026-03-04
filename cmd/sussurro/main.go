@@ -149,6 +149,24 @@ func run() {
 
 		pipe.SetUINotifier(uiMgr)
 
+		// buildHotkeyCallbacks returns the right onDown/onUp pair for the given mode.
+		buildHotkeyCallbacks := func(mode string) (onDown func(), onUp func()) {
+			if mode == "toggle" {
+				return func() {
+					if !pipe.StopRecording() {
+						log.Info("Listening...")
+						pipe.StartRecording()
+					} else {
+						log.Info("Transcribing...")
+					}
+				}, func() {}
+			}
+			// Default: push-to-talk
+			return func() { log.Info("Listening..."); pipe.StartRecording() },
+				func() { log.Info("Transcribing..."); pipe.StopRecording() }
+		}
+		uiMgr.SetHotkeyCallbackFactory(buildHotkeyCallbacks)
+
 		// Set up input handler before entering the UI main loop.
 		if hotkey.IsWayland() {
 			log.Debug("Wayland detected - using trigger server")
@@ -167,13 +185,9 @@ func run() {
 			}
 			log.Warn("Wayland: configure keyboard shortcut (see docs/wayland.md)")
 		} else {
-			// X11: register hotkey via GDK XGrabKey.
-			// macOS: registered via CGEventTap inside installOverlayHotkey (app_darwin.go).
 			log.Info("Using overlay hotkey")
-			uiMgr.InstallHotkey(cfg.Hotkey.Trigger,
-				func() { log.Info("Listening..."); pipe.StartRecording() },
-				func() { log.Info("Transcribing..."); pipe.StopRecording() },
-			)
+			onDown, onUp := buildHotkeyCallbacks(cfg.Hotkey.Mode)
+			uiMgr.InstallHotkey(cfg.Hotkey.Trigger, onDown, onUp)
 		}
 
 		log.Info("Sussurro UI running")
@@ -205,6 +219,22 @@ func run() {
 	} else {
 		log.Info("Using global hotkeys (X11 / macOS)")
 
+		var onDown, onUp func()
+		if cfg.Hotkey.Mode == "toggle" {
+			onDown = func() {
+				if !pipe.StopRecording() {
+					log.Info("Listening...")
+					pipe.StartRecording()
+				} else {
+					log.Info("Transcribing...")
+				}
+			}
+			onUp = func() {}
+		} else {
+			onDown = func() { log.Info("Listening..."); pipe.StartRecording() }
+			onUp = func() { log.Info("Transcribing..."); pipe.StopRecording() }
+		}
+
 		hkHandler, err := hotkey.NewHandler(cfg.Hotkey.Trigger, log)
 		if err != nil {
 			log.Error("Failed to initialize hotkey handler", "error", err)
@@ -212,10 +242,7 @@ func run() {
 		}
 		defer hkHandler.Unregister()
 
-		if err := hkHandler.Register(
-			func() { log.Info("Listening..."); pipe.StartRecording() },
-			func() { log.Info("Transcribing..."); pipe.StopRecording() },
-		); err != nil {
+		if err := hkHandler.Register(onDown, onUp); err != nil {
 			log.Error("Failed to register hotkey", "error", err)
 			os.Exit(1)
 		}

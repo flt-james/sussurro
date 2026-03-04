@@ -52,6 +52,7 @@ type LLMConfig struct {
 
 type HotkeyConfig struct {
 	Trigger string `mapstructure:"trigger"`
+	Mode    string `mapstructure:"mode"` // "push-to-talk" or "toggle"
 }
 
 type InjectionConfig struct {
@@ -88,6 +89,47 @@ func SaveHotkey(cfg *Config, trigger string) error {
 	}
 
 	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// SaveHotkeyMode rewrites only the hotkey.mode field in the YAML config file.
+// If the key does not exist (old config), it inserts it after the trigger: line.
+func SaveHotkeyMode(cfg *Config, mode string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find home directory: %w", err)
+	}
+	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// First pass: replace existing mode: key.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "mode:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + `mode: "` + mode + `"`
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+		}
+	}
+
+	// Key missing: insert after trigger: line.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "trigger:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			newLine := indent + `mode: "` + mode + `"`
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:i+1]...)
+			newLines = append(newLines, newLine)
+			newLines = append(newLines, lines[i+1:]...)
+			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
+		}
+	}
+
+	return fmt.Errorf("trigger key not found in config file; cannot insert mode")
 }
 
 // SaveLanguage rewrites only the models.asr.language field in the YAML config file.
@@ -167,6 +209,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	viper.SetDefault("models.asr.language", "en")
+	viper.SetDefault("hotkey.mode", "push-to-talk")
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
