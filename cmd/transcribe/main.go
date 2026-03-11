@@ -24,7 +24,7 @@ func main() {
 	flag.Parse()
 
 	if *inputFile == "" {
-		fmt.Fprintln(os.Stderr, "Usage: transcribe -i <audio-file> [-o output.txt] [-clean] [-lang en] [-config path]")
+		fmt.Fprintln(os.Stderr, "Usage: sussurro-transcribe -i <audio-file> [-o output.txt] [-clean] [-lang en] [-config path]")
 		os.Exit(1)
 	}
 

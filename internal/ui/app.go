@@ -28,6 +28,9 @@ type Manager struct {
 	// ("push-to-talk" or "toggle"). Set once by the caller via
 	// SetHotkeyCallbackFactory before InstallHotkey is called.
 	hotkeyCallbackFactory func(mode string) (onDown func(), onUp func())
+
+	// Called when the user toggles lowercase output in Settings.
+	onLowercaseOutput func(bool)
 }
 
 // NewManager constructs the Manager.  Call Run() to start the event loop.
@@ -141,6 +144,19 @@ func (m *Manager) InstallHotkey(trigger string, onDown, onUp func()) {
 	m.hotkeyOnDown = onDown
 	m.hotkeyOnUp = onUp
 	installOverlayHotkey(m.overlay, trigger, onDown, onUp)
+}
+
+// SetLowercaseOutputCallback stores a function that is called whenever the user
+// toggles the lowercase output setting in the Settings window.
+func (m *Manager) SetLowercaseOutputCallback(fn func(bool)) {
+	m.onLowercaseOutput = fn
+}
+
+// applyLowercaseOutput forwards the new value to the registered callback (if any).
+func (m *Manager) applyLowercaseOutput(v bool) {
+	if m.onLowercaseOutput != nil {
+		m.onLowercaseOutput(v)
+	}
 }
 
 // reinstallHotkey unregisters the current hotkey and registers a new one with

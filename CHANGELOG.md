@@ -2,6 +2,17 @@
 
 All notable changes to Sussurro will be documented in this file.
 
+## [2.1] - 2026-03-11
+
+### Added
+- **`sussurro-transcribe` companion CLI**: batch transcription of audio files using the same local Whisper and LLM models. Accepts any format ffmpeg supports. Flags: `-i`, `-o`, `-clean`, `-lang`, `-config`, `-debug`. Build with `make build-transcribe`.
+- **`scripts/package-release-all.sh`**: combined release packager that builds and bundles both `sussurro` and `sussurro-transcribe` into a single tarball with checksum.
+- **`scripts/package-transcribe.sh`**: dedicated release packager for `sussurro-transcribe` alone; produces `sussurro-transcribe-{platform}-{arch}.tar.gz` with checksum and an `INSTALL.txt`. Follows the same auto-detection style as `package-release.sh`.
+- **`scripts/install-transcribe.sh`**: standalone installer for `sussurro-transcribe`; updated to download from the dedicated `sussurro-transcribe-{platform}-{arch}.tar.gz` archive.
+- **`docs/transcribe.md`**: full documentation for the file transcription CLI.
+- **Lowercase output toggle** (`internal/config`, `internal/pipeline`, `internal/ui`): a new `app.lowercase_output` config field (default `false`) forces all transcribed text — including LLM-cleaned output and raw Whisper fallback — to lowercase before injection. The toggle is exposed as a switch in **Settings → Output** and takes effect immediately without a restart. `SaveLowercaseOutput()` writes the value to `~/.sussurro/config.yaml`, inserting the key after `log_level:` when upgrading from older configs.
+- PR merge from [@RRK37](https://github.com/RRK37)
+
 ## [2.0] - 2026-03-04
 
 ### Added

@@ -58,12 +58,13 @@ type Pipeline struct {
 	wg        sync.WaitGroup
 
 	// State
-	isRecording    bool
-	isTranscribing bool // true while processSegment is running; blocks new recordings
-	audioBuffer    []float32
-	audioBufferCap int        // pre-computed capacity to avoid repeated slice growth
-	mu             sync.Mutex // Protects isRecording, isTranscribing, and audioBuffer
-	maxDuration    string
+	isRecording     bool
+	isTranscribing  bool // true while processSegment is running; blocks new recordings
+	lowercaseOutput bool
+	audioBuffer     []float32
+	audioBufferCap  int        // pre-computed capacity to avoid repeated slice growth
+	mu              sync.Mutex // Protects isRecording, isTranscribing, lowercaseOutput, and audioBuffer
+	maxDuration     string
 }
 
 // NewPipeline creates a new processing pipeline
@@ -93,6 +94,14 @@ func NewPipeline(
 		stopChan:       make(chan struct{}),
 		maxDuration:    maxDuration,
 	}
+}
+
+// SetLowercaseOutput controls whether all transcribed text is forced to lowercase.
+// Safe to call from any goroutine.
+func (p *Pipeline) SetLowercaseOutput(v bool) {
+	p.mu.Lock()
+	p.lowercaseOutput = v
+	p.mu.Unlock()
 }
 
 // SetOnCompletion sets a callback to be called when processing is done
@@ -329,6 +338,12 @@ func (p *Pipeline) processSegment(samples []float32) {
 		// Fallback to raw text
 		cleanedText = text
 	}
+
+	p.mu.Lock()
+	if p.lowercaseOutput {
+		cleanedText = strings.ToLower(cleanedText)
+	}
+	p.mu.Unlock()
 
 	p.log.Info("Final Output",
 		"raw", text,

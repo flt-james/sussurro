@@ -144,6 +144,7 @@ You can also place model files manually and update the paths in `~/.sussurro/con
 |--------|-------------|
 | `make deps` | Build whisper.cpp and llama.cpp |
 | `make build` | Build binary with overlay + settings + tray |
+| `make build-transcribe` | Build `bin/sussurro-transcribe` (no UI dependencies) |
 | `make run` | Build and run |
 | `make clean` | Remove `bin/` |
 
