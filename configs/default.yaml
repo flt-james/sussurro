@@ -2,6 +2,7 @@ app:
   name: "Sussurro"
   debug: false
   log_level: "info" # debug, info, warn, error
+  lowercase_output: false
 
 audio:
   sample_rate: 16000

@@ -26,13 +26,14 @@ type modelInfo struct {
 
 // initialData is returned by getInitialData().
 type initialData struct {
-	Platform   string      `json:"platform"`
-	Version    string      `json:"version"`
-	Models     []modelInfo `json:"models"`
-	Hotkey     string      `json:"hotkey"`
-	HotkeyMode string      `json:"hotkeyMode"`
-	IsWayland  bool        `json:"isWayland"`
-	Language   string      `json:"language"`
+	Platform        string      `json:"platform"`
+	Version         string      `json:"version"`
+	Models          []modelInfo `json:"models"`
+	Hotkey          string      `json:"hotkey"`
+	HotkeyMode      string      `json:"hotkeyMode"`
+	IsWayland       bool        `json:"isWayland"`
+	Language        string      `json:"language"`
+	LowercaseOutput bool        `json:"lowercaseOutput"`
 }
 
 // bindBridge attaches all Go↔JS bridge functions to the webview.
@@ -97,6 +98,21 @@ func bindBridge(sw *settingsWindow) {
 			return fmt.Sprintf("error: %v", err)
 		}
 		mgr.cfg.Models.ASR.Language = lang
+		return "ok"
+	})
+
+	sw.w.Bind("saveLowercaseOutput", func(enabled bool) (result string) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in saveLowercaseOutput", "error", r)
+				result = fmt.Sprintf("error: panic: %v", r)
+			}
+		}()
+		if err := config.SaveLowercaseOutput(mgr.cfg, enabled); err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		mgr.cfg.App.LowercaseOutput = enabled
+		mgr.applyLowercaseOutput(enabled)
 		return "ok"
 	})
 
@@ -231,13 +247,14 @@ func buildInitialData(mgr *Manager) initialData {
 	}
 
 	return initialData{
-		Platform:   platform,
-		Version:    version.Version,
-		Models:     models,
-		Hotkey:     mgr.cfg.Hotkey.Trigger,
-		HotkeyMode: mgr.cfg.Hotkey.Mode,
-		IsWayland:  isWayland,
-		Language:   mgr.cfg.Models.ASR.Language,
+		Platform:        platform,
+		Version:         version.Version,
+		Models:          models,
+		Hotkey:          mgr.cfg.Hotkey.Trigger,
+		HotkeyMode:      mgr.cfg.Hotkey.Mode,
+		IsWayland:       isWayland,
+		Language:        mgr.cfg.Models.ASR.Language,
+		LowercaseOutput: mgr.cfg.App.LowercaseOutput,
 	}
 }
 

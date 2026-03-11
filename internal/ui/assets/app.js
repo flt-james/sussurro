@@ -34,6 +34,9 @@ function render(data) {
 
   // Language
   renderLanguage(data.language);
+
+  // Lowercase output
+  renderLowercaseOutput(data.lowercaseOutput);
 }
 
 // ---- Model list ----
@@ -173,6 +176,16 @@ function renderLanguage(currentLang) {
   select.onchange = async () => {
     const res = await window.saveLanguage(select.value);
     if (!res.startsWith('error')) showRestartBanner();
+  };
+}
+
+// ---- Lowercase output ----
+function renderLowercaseOutput(enabled) {
+  const toggle = document.getElementById('lowercase-toggle');
+  if (!toggle) return;
+  toggle.checked = !!enabled;
+  toggle.onchange = async () => {
+    await window.saveLowercaseOutput(toggle.checked);
   };
 }
 

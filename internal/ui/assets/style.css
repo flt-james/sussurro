@@ -9,7 +9,7 @@
   --border:    #2e2e30;
   --text:      #e8e8ea;
   --muted:     #6b6b70;
-  --accent:    #ffffff;
+  --accent:    #30d158;
   --green:     #30d158;
   --red:       #ff453a;
   --blue:      #0a84ff;
@@ -198,6 +198,41 @@ select {
 }
 select:focus { border-color: var(--accent); }
 select option { background: var(--surface2); color: var(--text); }
+
+/* ---- Toggle switch ---- */
+.toggle-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  background: #ffffff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
 
 /* ---- Hotkey row ---- */
 .hotkey-row {

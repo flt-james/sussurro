@@ -18,9 +18,10 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name     string `mapstructure:"name"`
-	Debug    bool   `mapstructure:"debug"`
-	LogLevel string `mapstructure:"log_level"`
+	Name            string `mapstructure:"name"`
+	Debug           bool   `mapstructure:"debug"`
+	LogLevel        string `mapstructure:"log_level"`
+	LowercaseOutput bool   `mapstructure:"lowercase_output"`
 }
 
 type AudioConfig struct {
@@ -195,6 +196,52 @@ func SaveLanguage(cfg *Config, language string) error {
 	return fmt.Errorf("could not find asr.threads key in config file; cannot insert language")
 }
 
+// SaveLowercaseOutput rewrites only the app.lowercase_output field in the YAML config file.
+// If the key does not exist (old config), it inserts it after the log_level: line in the app: section.
+func SaveLowercaseOutput(cfg *Config, enabled bool) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find home directory: %w", err)
+	}
+	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file: %w", err)
+	}
+
+	val := "false"
+	if enabled {
+		val = "true"
+	}
+
+	lines := strings.Split(string(data), "\n")
+
+	// First pass: replace existing lowercase_output: key.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "lowercase_output:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + "lowercase_output: " + val
+			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+		}
+	}
+
+	// Key missing: insert after log_level: line.
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "log_level:") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			newLine := indent + "lowercase_output: " + val
+			newLines := make([]string, 0, len(lines)+1)
+			newLines = append(newLines, lines[:i+1]...)
+			newLines = append(newLines, newLine)
+			newLines = append(newLines, lines[i+1:]...)
+			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
+		}
+	}
+
+	return fmt.Errorf("log_level key not found in config file; cannot insert lowercase_output")
+}
+
 func LoadConfig(path string) (*Config, error) {
 	if path != "" {
 		// If a specific file path is provided, use it directly
@@ -210,6 +257,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	viper.SetDefault("models.asr.language", "en")
 	viper.SetDefault("hotkey.mode", "push-to-talk")
+	viper.SetDefault("app.lowercase_output", false)
 
 	viper.SetEnvPrefix("SUSSURRO")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
