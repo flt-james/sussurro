@@ -149,6 +149,18 @@ else
 	go build $(UI_TAGS) -o $(BUILD_DIR)/$(APP_NAME) ./$(CMD_DIR)
 endif
 
+# Build transcribe CLI (no UI dependencies)
+build-transcribe: deps
+	@echo "Building transcribe..."
+	@mkdir -p $(BUILD_DIR)
+ifeq ($(UNAME_S),Darwin)
+	CGO_LDFLAGS="$(BASE_LDFLAGS) -framework Accelerate -framework Foundation" \
+	go build -o $(BUILD_DIR)/transcribe ./cmd/transcribe
+else
+	CGO_LDFLAGS="$(BASE_LDFLAGS)" \
+	go build -o $(BUILD_DIR)/transcribe ./cmd/transcribe
+endif
+
 run: build
 	@echo "Running $(APP_NAME)..."
 	@./$(BUILD_DIR)/$(APP_NAME)
