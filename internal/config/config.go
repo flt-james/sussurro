@@ -5,280 +5,134 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	App       AppConfig       `mapstructure:"app"`
-	Audio     AudioConfig     `mapstructure:"audio"`
-	Models    ModelsConfig    `mapstructure:"models"`
-	Hotkey    HotkeyConfig    `mapstructure:"hotkey"`
-	Injection InjectionConfig `mapstructure:"injection"`
+	PTT       PTTConfig       `yaml:"ptt"`
+	Audio     AudioConfig     `yaml:"audio"`
+	Models    ModelsConfig    `yaml:"models"`
+	Streaming StreamingConfig `yaml:"streaming"`
+	Debug     bool            `yaml:"debug"`
 }
 
-type AppConfig struct {
-	Name            string `mapstructure:"name"`
-	Debug           bool   `mapstructure:"debug"`
-	LogLevel        string `mapstructure:"log_level"`
-	LowercaseOutput bool   `mapstructure:"lowercase_output"`
+type PTTConfig struct {
+	Device string `yaml:"device"`
+	Chord  string `yaml:"chord"`
+	Cancel string `yaml:"cancel"`
 }
 
 type AudioConfig struct {
-	SampleRate  int    `mapstructure:"sample_rate"`
-	Channels    int    `mapstructure:"channels"`
-	BitDepth    int    `mapstructure:"bit_depth"`
-	BufferSize  int    `mapstructure:"buffer_size"`
-	MaxDuration string `mapstructure:"max_duration"`
+	SampleRate  int           `yaml:"sample_rate"`
+	MaxDuration time.Duration `yaml:"-"`
+	RawDuration string        `yaml:"max_duration"`
 }
 
 type ModelsConfig struct {
-	ASR ASRConfig `mapstructure:"asr"`
-	LLM LLMConfig `mapstructure:"llm"`
+	ASR ASRConfig `yaml:"asr"`
+	LLM LLMConfig `yaml:"llm"`
 }
 
 type ASRConfig struct {
-	Path     string `mapstructure:"path"`
-	Type     string `mapstructure:"type"`
-	Threads  int    `mapstructure:"threads"`
-	Language string `mapstructure:"language"`
+	Path     string `yaml:"path"`
+	Threads  int    `yaml:"threads"`
+	Language string `yaml:"language"`
 }
 
 type LLMConfig struct {
-	Path        string `mapstructure:"path"`
-	ContextSize int    `mapstructure:"context_size"`
-	GpuLayers   int    `mapstructure:"gpu_layers"`
-	Threads     int    `mapstructure:"threads"`
+	Path      string `yaml:"path"`
+	GPULayers int    `yaml:"gpu_layers"`
+	Threads   int    `yaml:"threads"`
+	Enabled   bool   `yaml:"enabled"`
 }
 
-type HotkeyConfig struct {
-	Trigger string `mapstructure:"trigger"`
-	Mode    string `mapstructure:"mode"` // "push-to-talk" or "toggle"
+type StreamingConfig struct {
+	Interval    time.Duration `yaml:"-"`
+	RawInterval string        `yaml:"interval"`
 }
 
-type InjectionConfig struct {
-	Method string `mapstructure:"method"`
+func Default() *Config {
+	return &Config{
+		PTT: PTTConfig{
+			Device: "auto",
+			Chord:  "ctrl+shift+space",
+			Cancel: "esc",
+		},
+		Audio: AudioConfig{
+			SampleRate:  16000,
+			MaxDuration: 60 * time.Second,
+			RawDuration: "60s",
+		},
+		Models: ModelsConfig{
+			ASR: ASRConfig{
+				Path:     "~/.sussurro/models/ggml-small.bin",
+				Threads:  4,
+				Language: "en",
+			},
+			LLM: LLMConfig{
+				Path:      "~/.sussurro/models/qwen3-sussurro-q4_k_m.gguf",
+				GPULayers: 99,
+				Threads:   4,
+				Enabled:   true,
+			},
+		},
+		Streaming: StreamingConfig{
+			Interval:    750 * time.Millisecond,
+			RawInterval: "750ms",
+		},
+	}
 }
 
-// SaveHotkey rewrites only the hotkey.trigger field in the YAML config file.
-func SaveHotkey(cfg *Config, trigger string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
+func Load(path string) (*Config, error) {
+	cfg := Default()
 
-	data, err := os.ReadFile(configFile)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	// Simple line-by-line replacement of the trigger value.
-	lines := strings.Split(string(data), "\n")
-	replaced := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + "trigger: \"" + trigger + "\""
-			replaced = true
-			break
+		if os.IsNotExist(err) {
+			cfg.resolve()
+			return cfg, nil
 		}
-	}
-	if !replaced {
-		return fmt.Errorf("trigger key not found in config file")
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	if cfg.Audio.RawDuration != "" {
+		d, err := time.ParseDuration(cfg.Audio.RawDuration)
+		if err != nil {
+			return nil, fmt.Errorf("parse audio.max_duration: %w", err)
+		}
+		cfg.Audio.MaxDuration = d
+	}
+
+	if cfg.Streaming.RawInterval != "" {
+		d, err := time.ParseDuration(cfg.Streaming.RawInterval)
+		if err != nil {
+			return nil, fmt.Errorf("parse streaming.interval: %w", err)
+		}
+		cfg.Streaming.Interval = d
+	}
+
+	cfg.resolve()
+	return cfg, nil
 }
 
-// SaveHotkeyMode rewrites only the hotkey.mode field in the YAML config file.
-// If the key does not exist (old config), it inserts it after the trigger: line.
-func SaveHotkeyMode(cfg *Config, mode string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-
-	// First pass: replace existing mode: key.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "mode:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + `mode: "` + mode + `"`
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-		}
-	}
-
-	// Key missing: insert after trigger: line.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "trigger:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			newLine := indent + `mode: "` + mode + `"`
-			newLines := make([]string, 0, len(lines)+1)
-			newLines = append(newLines, lines[:i+1]...)
-			newLines = append(newLines, newLine)
-			newLines = append(newLines, lines[i+1:]...)
-			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-		}
-	}
-
-	return fmt.Errorf("trigger key not found in config file; cannot insert mode")
+func (c *Config) resolve() {
+	c.Models.ASR.Path = expandHome(c.Models.ASR.Path)
+	c.Models.LLM.Path = expandHome(c.Models.LLM.Path)
 }
 
-// SaveLanguage rewrites only the models.asr.language field in the YAML config file.
-// If the key does not exist (old config), it inserts it after the threads: line in the asr: section.
-func SaveLanguage(cfg *Config, language string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-
-	// First pass: replace existing language: key.
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "language:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + `language: "` + language + `"`
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
 		}
+		return filepath.Join(home, path[2:])
 	}
-
-	// Key missing: insert after threads: inside the asr: subsection.
-	inASR := false
-	asrIndent := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		trimmed := strings.TrimSpace(line)
-
-		if trimmed == "asr:" {
-			inASR = true
-			asrIndent = indent
-			continue
-		}
-
-		if inASR {
-			// Leaving the asr: block when indent drops back to its level.
-			if indent <= asrIndent {
-				inASR = false
-				continue
-			}
-			if strings.HasPrefix(trimmed, "threads:") {
-				threadIndent := line[:indent]
-				newLine := threadIndent + `language: "` + language + `"`
-				newLines := make([]string, 0, len(lines)+1)
-				newLines = append(newLines, lines[:i+1]...)
-				newLines = append(newLines, newLine)
-				newLines = append(newLines, lines[i+1:]...)
-				return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-			}
-		}
-	}
-
-	return fmt.Errorf("could not find asr.threads key in config file; cannot insert language")
-}
-
-// SaveLowercaseOutput rewrites only the app.lowercase_output field in the YAML config file.
-// If the key does not exist (old config), it inserts it after the log_level: line in the app: section.
-func SaveLowercaseOutput(cfg *Config, enabled bool) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("cannot find home directory: %w", err)
-	}
-	configFile := filepath.Join(homeDir, ".sussurro", "config.yaml")
-
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		return fmt.Errorf("cannot read config file: %w", err)
-	}
-
-	val := "false"
-	if enabled {
-		val = "true"
-	}
-
-	lines := strings.Split(string(data), "\n")
-
-	// First pass: replace existing lowercase_output: key.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "lowercase_output:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + "lowercase_output: " + val
-			return os.WriteFile(configFile, []byte(strings.Join(lines, "\n")), 0644)
-		}
-	}
-
-	// Key missing: insert after log_level: line.
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "log_level:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			newLine := indent + "lowercase_output: " + val
-			newLines := make([]string, 0, len(lines)+1)
-			newLines = append(newLines, lines[:i+1]...)
-			newLines = append(newLines, newLine)
-			newLines = append(newLines, lines[i+1:]...)
-			return os.WriteFile(configFile, []byte(strings.Join(newLines, "\n")), 0644)
-		}
-	}
-
-	return fmt.Errorf("log_level key not found in config file; cannot insert lowercase_output")
-}
-
-func LoadConfig(path string) (*Config, error) {
-	if path != "" {
-		// If a specific file path is provided, use it directly
-		viper.SetConfigFile(path)
-	} else {
-		// Otherwise search in default locations
-		viper.SetConfigName("config") // Look for config.yaml (or .json, .toml)
-		viper.SetConfigType("yaml")
-		viper.AddConfigPath(".")
-		viper.AddConfigPath("$HOME/.sussurro")
-		viper.AddConfigPath("./configs")
-	}
-
-	viper.SetDefault("models.asr.language", "en")
-	viper.SetDefault("hotkey.mode", "push-to-talk")
-	viper.SetDefault("app.lowercase_output", false)
-
-	viper.SetEnvPrefix("SUSSURRO")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// Try fallback to "default" (old behavior)
-			viper.SetConfigName("default")
-			if err := viper.ReadInConfig(); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, err
-		}
-	}
-
-	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, err
-	}
-
-	return &cfg, nil
+	return path
 }

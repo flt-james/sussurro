@@ -2,18 +2,12 @@ package audio
 
 import (
 	"fmt"
-	"math"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
 )
 
-// byteBufPool recycles the temporary []byte copies that the malgo device
-// callback makes before handing data to the processing pipeline.
-// Audio chunks are fixed-size for the lifetime of a capture session, so
-// the pool reaches steady-state almost immediately.
 var byteBufPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, 0, 4096)
@@ -21,59 +15,32 @@ var byteBufPool = sync.Pool{
 	},
 }
 
-// CaptureEngine handles audio recording using malgo (miniaudio)
+// CaptureEngine handles audio recording using malgo (miniaudio).
 type CaptureEngine struct {
 	ctx          *malgo.AllocatedContext
 	device       *malgo.Device
 	sampleRate   int
 	channels     int
-	bitDepth     int // Should be 16 for Whisper
 	isRecording  bool
 	mutex        sync.Mutex
 	dataCallback func([]byte)
-	rmsCB        atomic.Pointer[func(float32)] // RMS callback; atomic for lock-free hot-path reads
 }
 
-// SetRMSCallback installs a callback that receives the RMS level of each
-// incoming audio chunk.  The callback is invoked from the audio thread —
-// implementations must be non-blocking.
-func (e *CaptureEngine) SetRMSCallback(cb func(float32)) {
-	if cb == nil {
-		e.rmsCB.Store(nil)
-		return
-	}
-	e.rmsCB.Store(&cb)
-}
-
-// computeRMS returns the root-mean-square of a float32 sample slice.
-func computeRMS(samples []float32) float32 {
-	if len(samples) == 0 {
-		return 0
-	}
-	var sum float64
-	for _, s := range samples {
-		sum += float64(s) * float64(s)
-	}
-	return float32(math.Sqrt(sum / float64(len(samples))))
-}
-
-// NewCaptureEngine creates a new engine instance
-// Whisper typically expects 16kHz, 1 channel, 16-bit PCM
-func NewCaptureEngine(sampleRate, channels int) (*CaptureEngine, error) {
+// NewCaptureEngine creates a new engine. Whisper expects 16kHz mono float32.
+func NewCaptureEngine(sampleRate int) (*CaptureEngine, error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to init audio context: %w", err)
+		return nil, fmt.Errorf("init audio context: %w", err)
 	}
 
 	return &CaptureEngine{
 		ctx:        ctx,
 		sampleRate: sampleRate,
-		channels:   channels,
-		bitDepth:   16, // Fixed to 16-bit for now
+		channels:   1,
 	}, nil
 }
 
-// StartRecording starts capturing audio and sends data to the provided channel
+// StartRecording starts capturing audio and sends float32 chunks to the channel.
 func (e *CaptureEngine) StartRecording(dataChan chan<- []float32) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
@@ -82,10 +49,7 @@ func (e *CaptureEngine) StartRecording(dataChan chan<- []float32) error {
 		return nil
 	}
 
-	// Define the callback that writes to the channel
 	onData := func(data []byte) {
-		// Reinterpret the raw F32 bytes as a []float32 via unsafe — avoids a
-		// per-sample decode loop and compiles down to a single memcpy.
 		numSamples := len(data) / 4
 		floats := make([]float32, numSamples)
 		if numSamples > 0 {
@@ -93,26 +57,15 @@ func (e *CaptureEngine) StartRecording(dataChan chan<- []float32) error {
 			copy(floats, src)
 		}
 
-		// Invoke RMS callback (non-blocking, lock-free atomic read)
-		cbPtr := e.rmsCB.Load()
-		if cbPtr != nil {
-			rms := computeRMS(floats)
-			(*cbPtr)(rms)
-		}
-
-		// Non-blocking send
 		select {
 		case dataChan <- floats:
 		default:
-			// Drop frame if buffer is full
 		}
 	}
 
-	// Start the internal device
 	return e.startDevice(onData)
 }
 
-// startDevice initiates the low-level audio stream
 func (e *CaptureEngine) startDevice(onData func([]byte)) error {
 	e.dataCallback = onData
 
@@ -120,19 +73,15 @@ func (e *CaptureEngine) startDevice(onData func([]byte)) error {
 	deviceConfig.Capture.Format = malgo.FormatF32
 	deviceConfig.Capture.Channels = uint32(e.channels)
 	deviceConfig.SampleRate = uint32(e.sampleRate)
-	deviceConfig.Alsa.NoMMap = 1 // Common fix for Linux ALSA
+	deviceConfig.Alsa.NoMMap = 1
 
 	var err error
-	// Callback to handle incoming audio data
 	e.device, err = malgo.InitDevice(e.ctx.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: func(pOutputSample, pInputSamples []byte, framecount uint32) {
 			if e.dataCallback == nil || len(pInputSamples) == 0 {
 				return
 			}
 
-			// Grab a pooled byte buffer and resize it to fit this chunk.
-			// onData (dataCallback) is synchronous so the buffer can be
-			// returned to the pool as soon as the call returns.
 			rawPtr := byteBufPool.Get().(*[]byte)
 			raw := *rawPtr
 			if cap(raw) < len(pInputSamples) {
@@ -149,25 +98,24 @@ func (e *CaptureEngine) startDevice(onData func([]byte)) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to init device: %w", err)
+		return fmt.Errorf("init device: %w", err)
 	}
 
-	err = e.device.Start()
-	if err != nil {
-		return fmt.Errorf("failed to start device: %w", err)
+	if err := e.device.Start(); err != nil {
+		return fmt.Errorf("start device: %w", err)
 	}
 
 	e.isRecording = true
 	return nil
 }
 
-// Stop halts the stream
-func (e *CaptureEngine) Stop() error {
+// Stop halts the audio stream.
+func (e *CaptureEngine) Stop() {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
 	if !e.isRecording {
-		return nil
+		return
 	}
 
 	if e.device != nil {
@@ -175,10 +123,9 @@ func (e *CaptureEngine) Stop() error {
 		e.device = nil
 	}
 	e.isRecording = false
-	return nil
 }
 
-// Close releases resources
+// Close releases all resources.
 func (e *CaptureEngine) Close() {
 	e.Stop()
 	if e.ctx != nil {

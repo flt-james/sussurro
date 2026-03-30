@@ -1,39 +1,4 @@
-# Binaries
-/bin/
-/dist/
-*.exe
-*.dll
-*.so
-*.dylib
-
-# Mac OS
-.DS_Store
-
-# Go
-vendor/
-go.work
+bin/
 third_party/
-
-# IDEs
-.vscode/
-.idea/
-*.iml
-
-# Models
-models/
-*.bin
-*.gguf
-
-# Environment variables
-.env
-.env.local
-
-# Logs
-*.log
-/sussurro
-/release
-
-# UI build helpers
-.build-compat/
-
-commit.txt
+*.yaml
+!config.example.yaml

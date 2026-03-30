@@ -5,28 +5,11 @@ import (
 	"os"
 )
 
-func Init(level string) *slog.Logger {
-	var lvl slog.Level
-	switch level {
-	case "debug":
-		lvl = slog.LevelDebug
-	case "info":
-		lvl = slog.LevelInfo
-	case "warn":
-		lvl = slog.LevelWarn
-	case "error":
-		lvl = slog.LevelError
-	default:
-		lvl = slog.LevelInfo
+func Init(debug bool) {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
 	}
-
-	opts := &slog.HandlerOptions{
-		Level: lvl,
-	}
-
-	handler := slog.NewTextHandler(os.Stdout, opts)
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
-
-	return logger
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
 }

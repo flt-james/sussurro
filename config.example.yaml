@@ -1,0 +1,22 @@
+ptt:
+  device: "auto"  # auto-discover "Gaming KB" by name, or set path like /dev/input/event2
+  chord: "ctrl+shift+space"
+  cancel: "esc"
+
+audio:
+  sample_rate: 16000
+  max_duration: "60s"
+
+models:
+  asr:
+    path: "~/.sussurro/models/ggml-small.bin"
+    threads: 4
+    language: "en"
+  llm:
+    path: "~/.sussurro/models/qwen3-sussurro-q4_k_m.gguf"
+    gpu_layers: 99
+    threads: 4
+    enabled: true  # set false to skip LLM cleanup
+
+streaming:
+  interval: "750ms"
