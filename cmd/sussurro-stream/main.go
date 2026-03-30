@@ -160,7 +160,7 @@ func (d *terminalDisplay) ShowRecording()            { fmt.Print("\n  recording.
 func (d *terminalDisplay) ShowEditing()              { fmt.Print("\n  recording edit... ") }
 func (d *terminalDisplay) UpdateText(text string)    { fmt.Printf("\r\033[K  %s", text) }
 func (d *terminalDisplay) ShowCleaning()             { fmt.Print("\n  cleaning up...") }
-func (d *terminalDisplay) ShowReady(text string)     { fmt.Printf("\r\033[K  final: %s\n  tap Ctrl+Shift+Space to deliver, Esc to cancel\n", text) }
+func (d *terminalDisplay) ShowReady(text string)     { fmt.Printf("\r\033[K  final: %s\n  tap to deliver, hold to edit, Ctrl+Shift+Alt to cancel\n", text) }
 func (d *terminalDisplay) ShowDelivering(text string) { fmt.Printf("\n  delivering: %s\n", text) }
 func (d *terminalDisplay) ShowCancelled()            { fmt.Print("\n  cancelled\n") }
 func (d *terminalDisplay) ShowIdle()                 { fmt.Print("  ready\n") }
@@ -195,7 +195,7 @@ func (d *windowDisplay) ShowCleaning() {
 
 func (d *windowDisplay) ShowReady(text string) {
 	d.overlay.SetText(text)
-	d.overlay.SetStatus("tap Ctrl+Shift+Space to deliver, Esc to cancel")
+	d.overlay.SetStatus("tap to deliver, hold to edit, Ctrl+Shift+Alt to cancel")
 }
 
 func (d *windowDisplay) ShowDelivering(text string) {
