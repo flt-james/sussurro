@@ -15,7 +15,7 @@ func Type(text string) error {
 	time.Sleep(100 * time.Millisecond)
 
 	if path, err := exec.LookPath("ydotool"); err == nil {
-		cmd := exec.Command(path, "type", "--", text)
+		cmd := exec.Command(path, "type", "--key-delay", "2", "--", text)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("ydotool: %w: %s", err, out)
 		}
@@ -23,7 +23,7 @@ func Type(text string) error {
 	}
 
 	if path, err := exec.LookPath("wtype"); err == nil {
-		cmd := exec.Command(path, "--", text)
+		cmd := exec.Command(path, "-d", "2", "--", text)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("wtype: %w: %s", err, out)
 		}

@@ -28,10 +28,11 @@ const (
 	StateCleaning        // chord released, LLM running
 	StateReady           // final text shown, waiting for tap or Esc
 	StateDelivering      // wtype running
+	StateEditing         // chord held in READY, recording edit instruction
 )
 
 func (s State) String() string {
-	return [...]string{"IDLE", "RECORDING", "CLEANING", "READY", "DELIVERING"}[s]
+	return [...]string{"IDLE", "RECORDING", "CLEANING", "READY", "DELIVERING", "EDITING"}[s]
 }
 
 func main() {
@@ -141,6 +142,7 @@ func main() {
 type Display interface {
 	Init()
 	ShowRecording()
+	ShowEditing()
 	UpdateText(text string)
 	ShowCleaning()
 	ShowReady(text string)
@@ -155,6 +157,7 @@ type terminalDisplay struct{}
 
 func (d *terminalDisplay) Init()                    {}
 func (d *terminalDisplay) ShowRecording()            { fmt.Print("\n  recording... ") }
+func (d *terminalDisplay) ShowEditing()              { fmt.Print("\n  recording edit... ") }
 func (d *terminalDisplay) UpdateText(text string)    { fmt.Printf("\r\033[K  %s", text) }
 func (d *terminalDisplay) ShowCleaning()             { fmt.Print("\n  cleaning up...") }
 func (d *terminalDisplay) ShowReady(text string)     { fmt.Printf("\r\033[K  final: %s\n  tap Ctrl+Shift+Space to deliver, Esc to cancel\n", text) }
@@ -176,6 +179,10 @@ func (d *windowDisplay) ShowRecording() {
 	d.overlay.SetText("")
 	d.overlay.SetStatus("recording...")
 	d.overlay.Show()
+}
+
+func (d *windowDisplay) ShowEditing() {
+	d.overlay.SetStatus("recording edit...")
 }
 
 func (d *windowDisplay) UpdateText(text string) {
@@ -218,10 +225,12 @@ func runStateMachine(
 	display.Init()
 
 	var (
-		state     = StateIdle
-		stateMu   sync.Mutex
-		finalText string
-		audioChan = make(chan []float32, 256)
+		state           = StateIdle
+		stateMu         sync.Mutex
+		finalText       string
+		audioChan       = make(chan []float32, 256)
+		editStart       time.Time
+		editCapStarted  bool
 	)
 
 	streamer := asr.NewStreamer(whisperEngine, cfg.Streaming.Interval, func(text string) {
@@ -278,27 +287,125 @@ func runStateMachine(
 					}()
 
 				case StateReady:
-					// Mark as delivering; actual typing happens on chord release
-					// so that Ctrl+Shift modifiers are no longer physically held.
-					state = StateDelivering
+					// Record timestamp. Audio capture starts after 400ms
+					// hold threshold — quick tap just delivers.
+					state = StateEditing
+					editStart = time.Now()
+					editCapStarted = false
 					slog.Debug("state", "new", state)
-					display.ShowDelivering(finalText)
+
+					go func() {
+						time.Sleep(400 * time.Millisecond)
+						stateMu.Lock()
+						if state != StateEditing {
+							stateMu.Unlock()
+							return
+						}
+						editCapStarted = true
+						stateMu.Unlock()
+
+						// Still holding — start recording edit instruction.
+						display.ShowEditing()
+						streamer.Reset()
+						streamer.Start()
+
+						for len(audioChan) > 0 {
+							<-audioChan
+						}
+
+						stateMu.Lock()
+						if state != StateEditing {
+							stateMu.Unlock()
+							return
+						}
+						stateMu.Unlock()
+
+						if err := capture.StartRecording(audioChan); err != nil {
+							slog.Error("start edit recording", "error", err)
+							stateMu.Lock()
+							state = StateReady
+							editCapStarted = false
+							stateMu.Unlock()
+							display.ShowReady(finalText)
+							return
+						}
+
+						for samples := range audioChan {
+							stateMu.Lock()
+							s := state
+							stateMu.Unlock()
+							if s != StateEditing {
+								return
+							}
+							streamer.AppendAudio(samples)
+						}
+					}()
 				}
 
 			case ptt.EventChordRelease:
-				if state == StateDelivering {
-					// Modifiers now released — safe to type via ydotool
-					text := finalText
-					go func() {
-						if err := deliver.Type(text); err != nil {
-							slog.Error("deliver", "error", err)
+				if state == StateEditing {
+					elapsed := time.Since(editStart)
+
+					if !editCapStarted {
+						// Short tap — no capture was started, just deliver.
+						state = StateDelivering
+						slog.Debug("state", "new", state, "reason", "tap-to-deliver", "elapsed", elapsed)
+						display.ShowDelivering(finalText)
+						text := finalText
+						go func() {
+							if err := deliver.Type(text); err != nil {
+								slog.Error("deliver", "error", err)
+							}
+							stateMu.Lock()
+							state = StateIdle
+							finalText = ""
+							stateMu.Unlock()
+							display.ShowIdle()
+						}()
+					} else {
+						capture.Stop()
+						for len(audioChan) > 0 {
+							streamer.AppendAudio(<-audioChan)
 						}
-						stateMu.Lock()
-						state = StateIdle
-						finalText = ""
-						stateMu.Unlock()
-						display.ShowIdle()
-					}()
+						editBuf := streamer.Stop()
+						// Long hold — process edit instruction.
+						state = StateCleaning
+						slog.Debug("state", "new", state, "reason", "edit-instruction")
+						display.ShowCleaning()
+						origText := finalText
+
+						go func() {
+							instruction, err := whisperEngine.Transcribe(editBuf)
+							if err != nil {
+								slog.Error("edit transcription", "error", err)
+								stateMu.Lock()
+								state = StateReady
+								stateMu.Unlock()
+								display.ShowReady(origText)
+								return
+							}
+
+							slog.Info("edit instruction", "text", instruction)
+
+							if llmEngine != nil && instruction != "" {
+								edited, err := llmEngine.EditText(origText, instruction)
+								if err != nil {
+									slog.Error("llm edit", "error", err)
+								} else {
+									slog.Info("edit applied", "before", origText, "after", edited)
+									origText = edited
+								}
+							} else {
+								slog.Info("edit skipped", "llm_nil", llmEngine == nil, "instruction_empty", instruction == "")
+							}
+
+							stateMu.Lock()
+							finalText = origText
+							state = StateReady
+							stateMu.Unlock()
+							display.ShowReady(origText)
+						}()
+					}
 				} else if state == StateRecording {
 					state = StateCleaning
 					slog.Debug("state", "new", state)
@@ -349,6 +456,13 @@ func runStateMachine(
 					state = StateIdle
 					finalText = ""
 					display.ShowCancelled()
+				case StateEditing:
+					if editCapStarted {
+						capture.Stop()
+						streamer.Stop()
+					}
+					state = StateReady
+					display.ShowReady(finalText)
 				case StateCleaning, StateReady:
 					state = StateIdle
 					finalText = ""

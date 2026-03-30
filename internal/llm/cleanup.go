@@ -163,6 +163,78 @@ func validateOutput(raw, cleaned string) bool {
 	return true
 }
 
+// EditText applies a voice edit instruction to existing text.
+func (e *Engine) EditText(original, instruction string) (string, error) {
+	prompt := fmt.Sprintf(`<|im_start|>system
+You are a text editing tool. You receive an original text and an edit instruction. You MUST apply the edit and output the modified result. Do NOT output the original unchanged.
+
+Example:
+Original: "The quick brown fox jumps over the lazy dog."
+Instruction: "Remove the word quick"
+Output: "The brown fox jumps over the lazy dog."
+
+Example:
+Original: "Hello world hello world"
+Instruction: "Remove the first hello"
+Output: "world hello world"
+
+RULES:
+1. Apply the edit instruction — deletions, insertions, replacements, rewordings
+2. Output ONLY the modified text, nothing else
+3. Do NOT echo the original text back unchanged
+4. Do NOT add explanations or preamble
+/nothink<|im_end|>
+<|im_start|>user
+Original: "%s"
+Instruction: "%s"<|im_end|>
+<|im_start|>assistant
+Output: "`, original, instruction)
+
+	if !e.debug {
+		cleanup := logger.SuppressStderr()
+		defer cleanup()
+	}
+
+	edited, err := e.model.Predict(prompt,
+		llama.SetTokens(0),
+		llama.SetThreads(e.threads),
+		llama.SetTemperature(0.1),
+		llama.SetTopP(0.9),
+		llama.SetStopWords("<|im_end|>"),
+	)
+	if err != nil {
+		return "", fmt.Errorf("prediction failed: %w", err)
+	}
+
+	edited = reThinkBlock.ReplaceAllString(edited, "")
+	if strings.Contains(edited, "<think>") {
+		idx := strings.Index(edited, "<think>")
+		edited = edited[:idx]
+	}
+	edited = strings.TrimSpace(edited)
+
+	for _, marker := range []string{"Input:", "Example:", "<|user|>"} {
+		if idx := strings.Index(edited, marker); idx != -1 {
+			edited = edited[:idx]
+		}
+	}
+	edited = strings.TrimSpace(edited)
+
+	// Strip surrounding quotes from the structured prompt format.
+	edited = strings.TrimPrefix(edited, "\"")
+	edited = strings.TrimSuffix(edited, "\"")
+	edited = strings.TrimSpace(edited)
+
+	slog.Debug("LLM edit output", "output", edited)
+
+	if edited == "" {
+		slog.Debug("LLM edit returned empty, falling back to original")
+		return original, nil
+	}
+
+	return edited, nil
+}
+
 // Close releases model resources.
 func (e *Engine) Close() {
 	if e.model != nil {
