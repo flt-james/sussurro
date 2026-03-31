@@ -227,10 +227,11 @@ func runStateMachine(
 	var (
 		state           = StateIdle
 		stateMu         sync.Mutex
-		finalText       string
-		audioChan       = make(chan []float32, 256)
-		editStart       time.Time
-		editCapStarted  bool
+		finalText        string
+		audioChan        = make(chan []float32, 256)
+		editStart        time.Time
+		editCapStarted   bool
+		autoDeliver      bool
 	)
 
 	streamer := asr.NewStreamer(whisperEngine, cfg.Streaming.Interval, func(text string) {
@@ -285,6 +286,11 @@ func runStateMachine(
 							streamer.AppendAudio(samples)
 						}
 					}()
+
+				case StateCleaning:
+					// Tap during cleanup — auto-deliver when done.
+					autoDeliver = true
+					slog.Debug("state", "note", "auto-deliver queued")
 
 				case StateReady:
 					// Record timestamp. Audio capture starts after 400ms
@@ -353,7 +359,7 @@ func runStateMachine(
 						display.ShowDelivering(finalText)
 						text := finalText
 						go func() {
-							if err := deliver.Type(text); err != nil {
+							if err := deliver.TypeAndSend(text); err != nil {
 								slog.Error("deliver", "error", err)
 							}
 							stateMu.Lock()
@@ -440,11 +446,29 @@ func runStateMachine(
 						}
 
 						stateMu.Lock()
-						finalText = text
-						state = StateReady
-						stateMu.Unlock()
-
-						display.ShowReady(text)
+						if autoDeliver {
+							autoDeliver = false
+							finalText = text
+							state = StateDelivering
+							stateMu.Unlock()
+							slog.Debug("state", "new", state, "reason", "auto-deliver")
+							display.ShowDelivering(text)
+							go func() {
+								if err := deliver.TypeAndSend(text); err != nil {
+									slog.Error("deliver", "error", err)
+								}
+								stateMu.Lock()
+								state = StateIdle
+								finalText = ""
+								stateMu.Unlock()
+								display.ShowIdle()
+							}()
+						} else {
+							finalText = text
+							state = StateReady
+							stateMu.Unlock()
+							display.ShowReady(text)
+						}
 					}()
 				}
 
@@ -466,6 +490,7 @@ func runStateMachine(
 				case StateCleaning, StateReady:
 					state = StateIdle
 					finalText = ""
+					autoDeliver = false
 					display.ShowCancelled()
 				}
 			}
