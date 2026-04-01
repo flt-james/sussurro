@@ -23,16 +23,17 @@ import (
 type State int
 
 const (
-	StateIdle      State = iota
-	StateRecording       // chord held, audio capturing, streaming whisper
-	StateCleaning        // chord released, LLM running
-	StateReady           // final text shown, waiting for tap or Esc
-	StateDelivering      // wtype running
-	StateEditing         // chord held in READY, recording edit instruction
+	StateIdle            State = iota
+	StateRecording             // chord held, audio capturing, streaming whisper
+	StateCleaning              // chord released, LLM running
+	StateReady                 // final text shown, waiting for tap or Esc
+	StatePendingDeliver        // first tap done, waiting for double-tap or timeout
+	StateDelivering            // wtype running
+	StateEditing               // chord held in READY, recording edit instruction
 )
 
 func (s State) String() string {
-	return [...]string{"IDLE", "RECORDING", "CLEANING", "READY", "DELIVERING", "EDITING"}[s]
+	return [...]string{"IDLE", "RECORDING", "CLEANING", "READY", "PENDING_DELIVER", "DELIVERING", "EDITING"}[s]
 }
 
 func main() {
@@ -232,6 +233,7 @@ func runStateMachine(
 		editStart        time.Time
 		editCapStarted   bool
 		autoDeliver      bool
+		doubleTapTimer   *time.Timer
 	)
 
 	streamer := asr.NewStreamer(whisperEngine, cfg.Streaming.Interval, func(text string) {
@@ -256,6 +258,27 @@ func runStateMachine(
 			switch ev {
 			case ptt.EventChordPress:
 				switch state {
+				case StatePendingDeliver:
+					// Double-tap: deliver without Enter.
+					if doubleTapTimer != nil {
+						doubleTapTimer.Stop()
+						doubleTapTimer = nil
+					}
+					state = StateDelivering
+					slog.Debug("state", "new", state, "reason", "double-tap-deliver-no-enter")
+					display.ShowDelivering(finalText)
+					text := finalText
+					go func() {
+						if err := deliver.Type(text + " "); err != nil {
+							slog.Error("deliver", "error", err)
+						}
+						stateMu.Lock()
+						state = StateIdle
+						finalText = ""
+						stateMu.Unlock()
+						display.ShowIdle()
+					}()
+
 				case StateIdle:
 					state = StateRecording
 					slog.Debug("state", "new", state)
@@ -353,12 +376,20 @@ func runStateMachine(
 					elapsed := time.Since(editStart)
 
 					if !editCapStarted {
-						// Short tap — no capture was started, just deliver.
-						state = StateDelivering
-						slog.Debug("state", "new", state, "reason", "tap-to-deliver", "elapsed", elapsed)
-						display.ShowDelivering(finalText)
-						text := finalText
-						go func() {
+						// Short tap — wait for possible double-tap.
+						state = StatePendingDeliver
+						slog.Debug("state", "new", state, "reason", "tap-pending", "elapsed", elapsed)
+						doubleTapTimer = time.AfterFunc(350*time.Millisecond, func() {
+							stateMu.Lock()
+							if state != StatePendingDeliver {
+								stateMu.Unlock()
+								return
+							}
+							state = StateDelivering
+							text := finalText
+							stateMu.Unlock()
+							slog.Debug("state", "new", StateDelivering, "reason", "single-tap-deliver-with-enter")
+							display.ShowDelivering(text)
 							if err := deliver.TypeAndSend(text); err != nil {
 								slog.Error("deliver", "error", err)
 							}
@@ -367,7 +398,7 @@ func runStateMachine(
 							finalText = ""
 							stateMu.Unlock()
 							display.ShowIdle()
-						}()
+						})
 					} else {
 						capture.Stop()
 						for len(audioChan) > 0 {
@@ -487,6 +518,14 @@ func runStateMachine(
 					}
 					state = StateReady
 					display.ShowReady(finalText)
+				case StatePendingDeliver:
+					if doubleTapTimer != nil {
+						doubleTapTimer.Stop()
+						doubleTapTimer = nil
+					}
+					state = StateIdle
+					finalText = ""
+					display.ShowCancelled()
 				case StateCleaning, StateReady:
 					state = StateIdle
 					finalText = ""
