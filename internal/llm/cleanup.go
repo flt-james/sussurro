@@ -83,7 +83,7 @@ Output ONLY the cleaned transcription text, nothing else.
 `, rawText)
 
 	cleaned, err := e.model.Predict(prompt,
-		llama.SetTokens(0),
+		llama.SetTokens(512),
 		llama.SetThreads(e.threads),
 		llama.SetTemperature(0.1),
 		llama.SetTopP(0.9),
@@ -193,7 +193,7 @@ Instruction: "%s"<|im_end|>
 Output: "`, original, instruction)
 
 	edited, err := e.model.Predict(prompt,
-		llama.SetTokens(0),
+		llama.SetTokens(512),
 		llama.SetThreads(e.threads),
 		llama.SetTemperature(0.1),
 		llama.SetTopP(0.9),
