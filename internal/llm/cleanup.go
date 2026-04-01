@@ -15,9 +15,10 @@ var reThinkBlock = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // Engine wraps go-llama.cpp for text cleanup.
 type Engine struct {
-	model   *llama.LLama
-	threads int
-	debug   bool
+	model         *llama.LLama
+	threads       int
+	debug         bool
+	restoreStderr func() // held for engine lifetime to suppress C library output
 }
 
 // NewEngine loads the LLM model.
@@ -26,9 +27,11 @@ func NewEngine(modelPath string, threads int, contextSize int, gpuLayers int, de
 		return nil, fmt.Errorf("model file not found: %s", modelPath)
 	}
 
+	// Suppress stderr for the lifetime of the engine to prevent llama.cpp's
+	// internal threads from leaking C library output between calls.
+	var restoreStderr func()
 	if !debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
+		restoreStderr = logger.SuppressStderr()
 	}
 
 	model, err := llama.New(
@@ -37,13 +40,17 @@ func NewEngine(modelPath string, threads int, contextSize int, gpuLayers int, de
 		llama.SetGPULayers(gpuLayers),
 	)
 	if err != nil {
+		if restoreStderr != nil {
+			restoreStderr()
+		}
 		return nil, fmt.Errorf("load llm model: %w", err)
 	}
 
 	return &Engine{
-		model:   model,
-		threads: threads,
-		debug:   debug,
+		model:         model,
+		threads:       threads,
+		debug:         debug,
+		restoreStderr: restoreStderr,
 	}, nil
 }
 
@@ -74,11 +81,6 @@ Output ONLY the cleaned transcription text, nothing else.
 %s<|im_end|>
 <|im_start|>assistant
 `, rawText)
-
-	if !e.debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
-	}
 
 	cleaned, err := e.model.Predict(prompt,
 		llama.SetTokens(0),
@@ -190,11 +192,6 @@ Instruction: "%s"<|im_end|>
 <|im_start|>assistant
 Output: "`, original, instruction)
 
-	if !e.debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
-	}
-
 	edited, err := e.model.Predict(prompt,
 		llama.SetTokens(0),
 		llama.SetThreads(e.threads),
@@ -235,9 +232,12 @@ Output: "`, original, instruction)
 	return edited, nil
 }
 
-// Close releases model resources.
+// Close releases model resources and restores stderr.
 func (e *Engine) Close() {
 	if e.model != nil {
 		e.model.Free()
+	}
+	if e.restoreStderr != nil {
+		e.restoreStderr()
 	}
 }

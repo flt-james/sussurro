@@ -13,10 +13,11 @@ import (
 
 // Engine wraps whisper.cpp for speech-to-text.
 type Engine struct {
-	model   whisper.Model
-	context whisper.Context
-	mutex   sync.Mutex
-	debug   bool
+	model          whisper.Model
+	context        whisper.Context
+	mutex          sync.Mutex
+	debug          bool
+	restoreStderr  func() // held for engine lifetime to suppress C library output
 }
 
 // NewEngine loads a whisper model and creates a processing context.
@@ -25,18 +26,26 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 		return nil, fmt.Errorf("model file not found: %s", modelPath)
 	}
 
+	// Suppress stderr for the lifetime of the engine to prevent whisper.cpp's
+	// internal threads from leaking C library output between calls.
+	var restoreStderr func()
 	if !debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
+		restoreStderr = logger.SuppressStderr()
 	}
 
 	model, err := whisper.New(modelPath)
 	if err != nil {
+		if restoreStderr != nil {
+			restoreStderr()
+		}
 		return nil, fmt.Errorf("load whisper model: %w", err)
 	}
 
 	ctx, err := model.NewContext()
 	if err != nil {
+		if restoreStderr != nil {
+			restoreStderr()
+		}
 		return nil, fmt.Errorf("create whisper context: %w", err)
 	}
 
@@ -47,9 +56,10 @@ func NewEngine(modelPath string, threads int, language string, debug bool) (*Eng
 	}
 
 	return &Engine{
-		model:   model,
-		context: ctx,
-		debug:   debug,
+		model:         model,
+		context:       ctx,
+		debug:         debug,
+		restoreStderr: restoreStderr,
 	}, nil
 }
 
@@ -60,11 +70,6 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 
 	if len(samples) == 0 {
 		return "", nil
-	}
-
-	if !e.debug {
-		cleanup := logger.SuppressStderr()
-		defer cleanup()
 	}
 
 	if err := e.context.Process(samples, nil, nil, nil); err != nil {
@@ -85,9 +90,12 @@ func (e *Engine) Transcribe(samples []float32) (string, error) {
 	return strings.TrimSpace(strings.Join(parts, " ")), nil
 }
 
-// Close releases model resources.
+// Close releases model resources and restores stderr.
 func (e *Engine) Close() {
 	if e.model != nil {
 		e.model.Close()
+	}
+	if e.restoreStderr != nil {
+		e.restoreStderr()
 	}
 }

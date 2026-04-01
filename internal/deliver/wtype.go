@@ -16,7 +16,12 @@ func TypeAndSend(text string) error {
 
 func key(name string) error {
 	if path, err := exec.LookPath("ydotool"); err == nil {
-		cmd := exec.Command(path, "key", name)
+		// ydotool uses Linux evdev key names (e.g. "enter"), not X11 names ("Return").
+		ydoName := name
+		if name == "Return" {
+			ydoName = "enter"
+		}
+		cmd := exec.Command(path, "key", ydoName)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("ydotool key: %w: %s", err, out)
 		}
