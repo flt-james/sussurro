@@ -14,6 +14,13 @@ func TypeAndSend(text string) error {
 	return key("Return")
 }
 
+// SendEnter presses Enter without typing any text first.
+// Waits briefly so physical modifier keys have time to release.
+func SendEnter() error {
+	time.Sleep(100 * time.Millisecond)
+	return key("Return")
+}
+
 func key(name string) error {
 	if path, err := exec.LookPath("ydotool"); err == nil {
 		// ydotool uses Linux evdev key names (e.g. "enter"), not X11 names ("Return").

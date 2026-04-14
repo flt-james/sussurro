@@ -234,7 +234,12 @@ func runStateMachine(
 		editCapStarted   bool
 		autoDeliver      bool
 		doubleTapTimer   *time.Timer
+		recordingStart   time.Time
 	)
+
+	// Quick taps from idle are too short for a useful recording —
+	// treat them as a "deliver Enter" gesture instead.
+	const idleTapMax = 250 * time.Millisecond
 
 	streamer := asr.NewStreamer(whisperEngine, cfg.Streaming.Interval, func(text string) {
 		display.UpdateText(text)
@@ -259,17 +264,23 @@ func runStateMachine(
 			case ptt.EventChordPress:
 				switch state {
 				case StatePendingDeliver:
-					// Double-tap: deliver without Enter.
+					// Double-tap: deliver with Enter (or just Enter if no text).
 					if doubleTapTimer != nil {
 						doubleTapTimer.Stop()
 						doubleTapTimer = nil
 					}
 					state = StateDelivering
-					slog.Debug("state", "new", state, "reason", "double-tap-deliver-no-enter")
+					slog.Debug("state", "new", state, "reason", "double-tap-deliver-with-enter")
 					display.ShowDelivering(finalText)
 					text := finalText
 					go func() {
-						if err := deliver.Type(text + " "); err != nil {
+						var err error
+						if text == "" {
+							err = deliver.SendEnter()
+						} else {
+							err = deliver.TypeAndSend(text)
+						}
+						if err != nil {
 							slog.Error("deliver", "error", err)
 						}
 						stateMu.Lock()
@@ -281,6 +292,7 @@ func runStateMachine(
 
 				case StateIdle:
 					state = StateRecording
+					recordingStart = time.Now()
 					slog.Debug("state", "new", state)
 					display.ShowRecording()
 
@@ -385,12 +397,20 @@ func runStateMachine(
 								stateMu.Unlock()
 								return
 							}
-							state = StateDelivering
 							text := finalText
+							if text == "" {
+								// Single tap from idle — nothing to deliver.
+								state = StateIdle
+								stateMu.Unlock()
+								slog.Debug("state", "new", StateIdle, "reason", "idle-single-tap-noop")
+								display.ShowIdle()
+								return
+							}
+							state = StateDelivering
 							stateMu.Unlock()
-							slog.Debug("state", "new", StateDelivering, "reason", "single-tap-deliver-with-enter")
+							slog.Debug("state", "new", StateDelivering, "reason", "single-tap-deliver-no-enter")
 							display.ShowDelivering(text)
-							if err := deliver.TypeAndSend(text); err != nil {
+							if err := deliver.Type(text + " "); err != nil {
 								slog.Error("deliver", "error", err)
 							}
 							stateMu.Lock()
@@ -444,6 +464,29 @@ func runStateMachine(
 						}()
 					}
 				} else if state == StateRecording {
+					if time.Since(recordingStart) < idleTapMax {
+						// Tap too short to be a real recording — treat as a
+						// "deliver Enter on double-tap" gesture.
+						capture.Stop()
+						streamer.Stop()
+						finalText = ""
+						state = StatePendingDeliver
+						slog.Debug("state", "new", state, "reason", "idle-tap-pending-enter")
+						display.ShowIdle()
+						doubleTapTimer = time.AfterFunc(350*time.Millisecond, func() {
+							stateMu.Lock()
+							if state != StatePendingDeliver {
+								stateMu.Unlock()
+								return
+							}
+							state = StateIdle
+							stateMu.Unlock()
+							slog.Debug("state", "new", StateIdle, "reason", "idle-single-tap-noop")
+							display.ShowIdle()
+						})
+						stateMu.Unlock()
+						continue
+					}
 					state = StateCleaning
 					slog.Debug("state", "new", state)
 					capture.Stop()
@@ -467,14 +510,8 @@ func runStateMachine(
 							"samples", len(finalBuf),
 							"duration", time.Since(start))
 
-						if llmEngine != nil && text != "" {
-							cleaned, err := llmEngine.CleanupText(text)
-							if err != nil {
-								slog.Error("llm cleanup", "error", err)
-							} else {
-								text = cleaned
-							}
-						}
+						// LLM cleanup disabled — use raw whisper text directly.
+						// LLM is still loaded for EditText support.
 
 						stateMu.Lock()
 						if autoDeliver {
