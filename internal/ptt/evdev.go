@@ -50,15 +50,38 @@ const (
 	EventEsc                       // Esc pressed
 )
 
-// Listener reads raw evdev events and detects chord presses.
+// Listener reads raw evdev events and detects chord presses. It can read from
+// several devices at once; key state is merged across all of them so a chord
+// split across multiple HID interfaces of one keyboard is still detected.
+//
+// Devices are re-attached automatically: a supervisor goroutine re-runs
+// discovery every deviceRescanInterval and opens anything not currently being
+// read. This covers a keyboard that is unplugged and replugged (the kernel
+// destroys the device behind our fd, so the read loop detaches it and the
+// supervisor opens the replacement) as well as a keyboard plugged in after
+// startup. Note that evdev paths are recycled — a replugged keyboard usually
+// lands back on the same /dev/input/eventN — so attachment is tracked by which
+// paths we currently hold an open fd for, not by path alone.
 type Listener struct {
-	file     *os.File
 	events   chan Event
 	stop     chan struct{}
 	wg       sync.WaitGroup
-	held     map[uint16]bool
+	discover func() ([]string, error)
+
+	mu          sync.Mutex // guards held + chordActive across per-device readLoops
+	held        map[uint16]bool
 	chordActive bool
+
+	devMu       sync.Mutex // guards devices + stopped + lastOpenErr
+	devices     map[string]*os.File
+	stopped     bool
+	lastOpenErr error
 }
+
+// deviceRescanInterval is how often the supervisor looks for devices to attach.
+// Reading /proc/bus/input/devices is cheap, and this bounds how long the daemon
+// stays deaf after a replug.
+const deviceRescanInterval = 2 * time.Second
 
 // chordKeys are the keys that make up Ctrl+Shift+Space
 var chordKeys = map[uint16]bool{
@@ -82,6 +105,83 @@ var cancelKeys = map[uint16]bool{
 // isTrackedKey returns true for any key we care about
 func isTrackedKey(code uint16) bool {
 	return chordKeys[code] || cancelKeys[code]
+}
+
+// FindKeyboards returns the paths of every real typing keyboard found in
+// /proc/bus/input/devices. Real keyboards are identified by the presence of
+// "sysrq" in their Handlers line, which cleanly excludes power buttons,
+// system-control / consumer-control HID interfaces, and other non-typing devices.
+//
+// All matching devices are returned because a single physical keyboard often
+// exposes several sysrq-capable evdev interfaces, and the actual typing keys
+// may land on any one of them (e.g. the Keychron C3 Pro emits Ctrl+Shift+Space
+// only on its second interface). The caller listens on all of them at once.
+func FindKeyboards() ([]string, error) {
+	kbs, err := scanKeyboards()
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(kbs))
+	for _, kb := range kbs {
+		slog.Info("auto-discovered keyboard", "name", kb.Name, "path", kb.Path)
+		paths = append(paths, kb.Path)
+	}
+	return paths, nil
+}
+
+// keyboard is one discovered typing device.
+type keyboard struct {
+	Name string
+	Path string
+}
+
+// scanKeyboards implements the discovery described on FindKeyboards. It is kept
+// silent because the device supervisor re-runs it every couple of seconds;
+// callers decide what is worth logging.
+func scanKeyboards() ([]keyboard, error) {
+	data, err := os.ReadFile("/proc/bus/input/devices")
+	if err != nil {
+		return nil, fmt.Errorf("read /proc/bus/input/devices: %w", err)
+	}
+
+	var kbs []keyboard
+	for _, block := range strings.Split(string(data), "\n\n") {
+		var name, eventName string
+		hasSysrq := false
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "N: Name="):
+				name = strings.Trim(strings.TrimPrefix(line, "N: Name="), "\"")
+			case strings.HasPrefix(line, "H: Handlers="):
+				for _, tok := range strings.Fields(strings.TrimPrefix(line, "H: Handlers=")) {
+					if tok == "sysrq" {
+						hasSysrq = true
+					}
+					if strings.HasPrefix(tok, "event") {
+						eventName = tok
+					}
+				}
+			}
+		}
+		if hasSysrq && eventName != "" {
+			kbs = append(kbs, keyboard{Name: name, Path: "/dev/input/" + eventName})
+		}
+	}
+
+	if len(kbs) == 0 {
+		return nil, fmt.Errorf("no keyboard (sysrq-capable input device) found in /proc/bus/input/devices")
+	}
+	return kbs, nil
+}
+
+// deviceName reads a device's name from sysfs, for logging. Returns "" if the
+// device has already gone away.
+func deviceName(path string) string {
+	data, err := os.ReadFile(filepath.Join("/sys/class/input", filepath.Base(path), "device", "name"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // FindDeviceByName scans /dev/input/ for a device whose name contains the given substring.
@@ -109,24 +209,124 @@ func FindDeviceByName(nameSubstr string) (string, error) {
 	return "", fmt.Errorf("no input device matching %q found", nameSubstr)
 }
 
-// NewListener opens the evdev device and returns a Listener.
-func NewListener(devicePath string) (*Listener, error) {
-	f, err := os.Open(devicePath)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w (are you in the input group?)", devicePath, err)
+// NewListener reads from a fixed set of evdev devices. The paths are re-opened
+// automatically if those devices disappear and come back.
+func NewListener(devicePaths ...string) (*Listener, error) {
+	if len(devicePaths) == 0 {
+		return nil, fmt.Errorf("no input devices given")
+	}
+	paths := append([]string(nil), devicePaths...)
+	return newListener(func() ([]string, error) { return paths, nil })
+}
+
+// NewAutoListener reads from every keyboard found by FindKeyboards, and keeps
+// following them across unplug/replug and newly attached keyboards.
+func NewAutoListener() (*Listener, error) {
+	return newListener(func() ([]string, error) {
+		kbs, err := scanKeyboards()
+		if err != nil {
+			return nil, err
+		}
+		paths := make([]string, 0, len(kbs))
+		for _, kb := range kbs {
+			paths = append(paths, kb.Path)
+		}
+		return paths, nil
+	})
+}
+
+func newListener(discover func() ([]string, error)) (*Listener, error) {
+	l := &Listener{
+		events:   make(chan Event, 16),
+		stop:     make(chan struct{}),
+		discover: discover,
+		held:     make(map[uint16]bool),
+		devices:  make(map[string]*os.File),
 	}
 
-	l := &Listener{
-		file:   f,
-		events: make(chan Event, 16),
-		stop:   make(chan struct{}),
-		held:   make(map[uint16]bool),
+	// Require at least one device up front so a misconfigured path or a missing
+	// input-group membership still fails loudly at startup rather than silently
+	// waiting forever for a keyboard that will never arrive.
+	attached, err := l.attachAvailable()
+	if err != nil {
+		return nil, err
+	}
+	if attached == 0 {
+		if l.lastOpenErr != nil {
+			return nil, fmt.Errorf("open evdev: %w (are you in the input group?)", l.lastOpenErr)
+		}
+		return nil, fmt.Errorf("no usable input device found")
 	}
 
 	l.wg.Add(1)
-	go l.readLoop()
+	go l.supervise()
 
 	return l, nil
+}
+
+// attachAvailable opens every discovered device that is not already attached
+// and starts a read loop for it. It returns the number now attached.
+func (l *Listener) attachAvailable() (int, error) {
+	paths, err := l.discover()
+	if err != nil {
+		return 0, err
+	}
+
+	l.devMu.Lock()
+	defer l.devMu.Unlock()
+	if l.stopped {
+		return len(l.devices), nil
+	}
+
+	for _, p := range paths {
+		if _, ok := l.devices[p]; ok {
+			continue
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			// Normal right after a replug: udev may not have applied
+			// permissions yet. The next scan retries.
+			slog.Debug("open evdev device", "path", p, "error", err)
+			l.lastOpenErr = err
+			continue
+		}
+		l.devices[p] = f
+		slog.Info("keyboard attached", "name", deviceName(p), "path", p)
+		l.wg.Add(1)
+		go l.readLoop(p, f)
+	}
+	return len(l.devices), nil
+}
+
+// supervise re-attaches devices as they appear.
+func (l *Listener) supervise() {
+	defer l.wg.Done()
+
+	ticker := time.NewTicker(deviceRescanInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.stop:
+			return
+		case <-ticker.C:
+			if _, err := l.attachAvailable(); err != nil {
+				slog.Debug("keyboard rescan", "error", err)
+			}
+		}
+	}
+}
+
+// detach drops a device that has gone away, so the supervisor reopens its path
+// when the device comes back.
+func (l *Listener) detach(path string) {
+	l.devMu.Lock()
+	f, ok := l.devices[path]
+	delete(l.devices, path)
+	l.devMu.Unlock()
+	if ok {
+		f.Close()
+	}
 }
 
 // Events returns the channel of detected events.
@@ -136,13 +336,28 @@ func (l *Listener) Events() <-chan Event {
 
 // Close stops the listener and releases resources.
 func (l *Listener) Close() {
+	l.devMu.Lock()
+	if l.stopped {
+		l.devMu.Unlock()
+		return
+	}
+	l.stopped = true
+	files := make([]*os.File, 0, len(l.devices))
+	for p, f := range l.devices {
+		files = append(files, f)
+		delete(l.devices, p)
+	}
+	l.devMu.Unlock()
+
 	close(l.stop)
-	l.file.Close()
+	for _, f := range files {
+		f.Close()
+	}
 	l.wg.Wait()
 	close(l.events)
 }
 
-func (l *Listener) readLoop() {
+func (l *Listener) readLoop(path string, file *os.File) {
 	defer l.wg.Done()
 
 	buf := make([]byte, inputEventSize)
@@ -154,9 +369,9 @@ func (l *Listener) readLoop() {
 		}
 
 		// Set a read deadline so we can check stop periodically
-		l.file.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		file.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
-		n, err := l.file.Read(buf)
+		n, err := file.Read(buf)
 		if err != nil {
 			if os.IsTimeout(err) {
 				continue
@@ -165,7 +380,11 @@ func (l *Listener) readLoop() {
 			case <-l.stop:
 				return
 			default:
-				slog.Error("evdev read error", "error", err)
+				// The device is gone (typically a replug: ENODEV). Drop it and
+				// let the supervisor pick up its replacement.
+				slog.Warn("keyboard disconnected", "path", path, "error", err)
+				l.detach(path)
+				l.forgetKeys()
 				return
 			}
 		}
@@ -189,11 +408,34 @@ func (l *Listener) readLoop() {
 	}
 }
 
+// forgetKeys clears held-key state after a device disappears. A key that was
+// down when the keyboard vanished never produces a release event, so without
+// this the stale "held" entry would make the next chord fire early — and if the
+// chord was active, recording would run forever. Releasing it here ends that
+// recording the same way lifting the keys would.
+func (l *Listener) forgetKeys() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.held = make(map[uint16]bool)
+	if l.chordActive {
+		l.chordActive = false
+		select {
+		case l.events <- EventChordRelease:
+		default:
+		}
+	}
+}
+
 func (l *Listener) handleKey(code uint16, value int32) {
 	// Only track keys we care about
 	if !isTrackedKey(code) {
 		return
 	}
+
+	// held + chordActive are shared across per-device readLoops.
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	switch value {
 	case keyPress:

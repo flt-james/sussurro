@@ -4,14 +4,27 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"regexp"
 	"strings"
 
 	llama "github.com/AshkanYarmoradi/go-llama.cpp"
 	"github.com/jms301/sussurro-stream/internal/logger"
 )
 
-var reThinkBlock = regexp.MustCompile(`(?s)<think>.*?</think>`)
+// stripThinking removes a reasoning model's <think> block from raw output.
+// qwen3 normally emits "<think>...</think>\n\nANSWER", but with /no_think and a
+// hand-rolled prompt template the opening tag is often suppressed, leaving a
+// dangling "</think>" before the answer. We handle all cases:
+//   - a closing tag present  -> the answer is everything after the LAST </think>
+//   - only an opening tag    -> output was truncated mid-thought, take what precedes it
+func stripThinking(s string) string {
+	if idx := strings.LastIndex(s, "</think>"); idx != -1 {
+		return strings.TrimSpace(s[idx+len("</think>"):])
+	}
+	if idx := strings.Index(s, "<think>"); idx != -1 {
+		return strings.TrimSpace(s[:idx])
+	}
+	return strings.TrimSpace(s)
+}
 
 // Engine wraps go-llama.cpp for text cleanup.
 type Engine struct {
@@ -76,7 +89,7 @@ Example input: "um you should uh you should probably fix the the database"
 Example output: "You should probably fix the database."
 
 Output ONLY the cleaned text, nothing else.
-/nothink<|im_end|>
+/no_think<|im_end|>
 <|im_start|>user
 %s<|im_end|>
 <|im_start|>assistant
@@ -94,12 +107,7 @@ Output ONLY the cleaned text, nothing else.
 	}
 
 	// Post-processing
-	cleaned = reThinkBlock.ReplaceAllString(cleaned, "")
-	if strings.Contains(cleaned, "<think>") {
-		idx := strings.Index(cleaned, "<think>")
-		cleaned = cleaned[:idx]
-	}
-	cleaned = strings.TrimSpace(cleaned)
+	cleaned = stripThinking(cleaned)
 
 	for _, marker := range []string{"Input:", "Example:", "<|user|>"} {
 		if idx := strings.Index(cleaned, marker); idx != -1 {
@@ -191,7 +199,7 @@ RULES:
 2. Output ONLY the modified text, nothing else
 3. Do NOT echo the original text back unchanged
 4. Do NOT add explanations or preamble
-/nothink<|im_end|>
+/no_think<|im_end|>
 <|im_start|>user
 Original: "%s"
 Instruction: "%s"<|im_end|>
@@ -209,12 +217,7 @@ Output: "`, original, instruction)
 		return "", fmt.Errorf("prediction failed: %w", err)
 	}
 
-	edited = reThinkBlock.ReplaceAllString(edited, "")
-	if strings.Contains(edited, "<think>") {
-		idx := strings.Index(edited, "<think>")
-		edited = edited[:idx]
-	}
-	edited = strings.TrimSpace(edited)
+	edited = stripThinking(edited)
 
 	for _, marker := range []string{"Input:", "Example:", "<|user|>"} {
 		if idx := strings.Index(edited, marker); idx != -1 {

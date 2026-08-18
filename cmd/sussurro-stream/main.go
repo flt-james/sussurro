@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -54,23 +56,34 @@ func main() {
 
 	logger.Init(cfg.Debug)
 
-	// Resolve evdev device
+	// Resolve evdev device(s)
 	devicePath := cfg.PTT.Device
 	if *device != "" {
 		devicePath = *device
 	}
-	if devicePath == "auto" || devicePath == "" {
-		devicePath, err = ptt.FindDeviceByName("Gaming KB")
+	auto := devicePath == "auto" || devicePath == ""
+	var devicePaths []string
+	if auto {
+		devicePaths, err = ptt.FindKeyboards()
 		if err != nil {
 			slog.Error("auto-discover keyboard failed", "error", err)
 			os.Exit(1)
 		}
+	} else {
+		devicePaths = []string{devicePath}
 	}
 
 	// Initialize components
-	slog.Info("initializing", "device", devicePath)
+	slog.Info("initializing", "devices", devicePaths)
 
-	listener, err := ptt.NewListener(devicePath)
+	// Either listener re-attaches its devices across unplug/replug; the auto one
+	// additionally picks up keyboards plugged in after startup.
+	var listener *ptt.Listener
+	if auto {
+		listener, err = ptt.NewAutoListener()
+	} else {
+		listener, err = ptt.NewListener(devicePaths...)
+	}
 	if err != nil {
 		slog.Error("open evdev", "error", err)
 		os.Exit(1)
@@ -139,6 +152,29 @@ func main() {
 	runStateMachine(cfg, listener, capture, whisperEngine, llmEngine, display)
 }
 
+// nonSpeechRe matches whisper's non-speech annotations — [BLANK_AUDIO],
+// [SILENCE], (upbeat music) and friends. Whisper always wraps these in
+// brackets or parens, so a transcript made up of nothing else is silence.
+var nonSpeechRe = regexp.MustCompile(`[\[(][^\])]*[\])]`)
+
+// cleanTranscript trims a whisper result and blanks it entirely when it
+// carries no actual speech.
+//
+// Without this, a press that catches silence stores the literal string
+// "[BLANK_AUDIO]" as finalText and parks the machine in StateReady. Every
+// later hold is then routed into the edit branch as an instruction against
+// that text instead of starting a fresh dictation, so nothing is ever typed
+// and the daemon looks deaf.
+//
+// Speech that merely contains a parenthetical is left untouched — only a
+// transcript that is *all* annotation is discarded.
+func cleanTranscript(text string) string {
+	if strings.TrimSpace(nonSpeechRe.ReplaceAllString(text, " ")) == "" {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
 // Display is the output interface for the state machine.
 type Display interface {
 	Init()
@@ -184,6 +220,9 @@ func (d *windowDisplay) ShowRecording() {
 
 func (d *windowDisplay) ShowEditing() {
 	d.overlay.SetStatus("recording edit...")
+	// Self-sufficient rather than relying on ShowReady having left the
+	// window up; Show is idempotent.
+	d.overlay.Show()
 }
 
 func (d *windowDisplay) UpdateText(text string) {
@@ -391,7 +430,7 @@ func runStateMachine(
 						// Short tap — wait for possible double-tap.
 						state = StatePendingDeliver
 						slog.Debug("state", "new", state, "reason", "tap-pending", "elapsed", elapsed)
-						doubleTapTimer = time.AfterFunc(350*time.Millisecond, func() {
+						doubleTapTimer = time.AfterFunc(550*time.Millisecond, func() {
 							stateMu.Lock()
 							if state != StatePendingDeliver {
 								stateMu.Unlock()
@@ -442,6 +481,7 @@ func runStateMachine(
 								return
 							}
 
+							instruction = cleanTranscript(instruction)
 							slog.Info("edit instruction", "text", instruction)
 
 							if llmEngine != nil && instruction != "" {
@@ -473,7 +513,7 @@ func runStateMachine(
 						state = StatePendingDeliver
 						slog.Debug("state", "new", state, "reason", "idle-tap-pending-enter")
 						display.ShowIdle()
-						doubleTapTimer = time.AfterFunc(350*time.Millisecond, func() {
+						doubleTapTimer = time.AfterFunc(550*time.Millisecond, func() {
 							stateMu.Lock()
 							if state != StatePendingDeliver {
 								stateMu.Unlock()
@@ -506,9 +546,25 @@ func runStateMachine(
 							return
 						}
 
+						text = cleanTranscript(text)
+
 						slog.Debug("final transcription", "text", text,
 							"samples", len(finalBuf),
 							"duration", time.Since(start))
+
+						// Silence only — drop back to idle rather than pinning
+						// finalText, which would turn every later hold into an
+						// edit instruction.
+						if text == "" {
+							slog.Info("empty transcription — ignoring")
+							stateMu.Lock()
+							autoDeliver = false
+							finalText = ""
+							state = StateIdle
+							stateMu.Unlock()
+							display.ShowIdle()
+							return
+						}
 
 						// LLM cleanup disabled — use raw whisper text directly.
 						// LLM is still loaded for EditText support.
